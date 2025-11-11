@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hellas Launcher</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <div class="video-wrapper" id="video-wrapper">
+      <video id="bg-video" autoplay muted loop playsinline>
+        <source src="../../assets/bg/aetherveil-bg.webm" type="video/webm" />
+        <source src="../../assets/bg/aetherveil-bg.mp4" type="video/mp4" />
+      </video>
+      <img id="bg-fallback" src="../../assets/bg/aetherveil-fallback.png" alt="Aetherveil background" />
+    </div>
+
+    <div class="overlay">
+      <header class="top-bar">
+        <button class="logo" id="logo-button" title="Open hellasregion.com">
+          <span class="logo-text">Hellas</span>
+        </button>
+        <div class="menu">
+          <button id="account-button" class="icon-button" aria-haspopup="true" aria-expanded="false">
+            <span class="icon account"></span>
+          </button>
+          <button id="menu-button" class="icon-button" aria-haspopup="true" aria-expanded="false">
+            <span class="icon menu"></span>
+          </button>
+          <nav id="dropdown" class="dropdown" aria-label="Launcher menu">
+            <ul>
+              <li><button data-action="dynmap">Dynmap</button></li>
+              <li><button data-action="toggle-animation">Toggle Animation</button></li>
+              <li><button data-action="logout">Logout</button></li>
+            </ul>
+          </nav>
+        </div>
+      </header>
+
+      <main class="content">
+        <section class="card">
+          <div class="card-header">
+            <h1>Hellas Launcher</h1>
+            <p class="subtitle">Enter the Hellas Region</p>
+          </div>
+          <div class="status-row">
+            <span id="install-state">Checking installation…</span>
+            <span id="version-label"></span>
+          </div>
+          <label class="terms">
+            <input type="checkbox" id="terms-checkbox" />
+            <span>I have read and accept the Terms &amp; Conditions.</span>
+          </label>
+          <button id="start-button" class="primary" disabled>
+            <span class="lock"></span>
+            <span class="label">Start</span>
+          </button>
+          <button id="update-button" class="secondary">
+            <span class="label">Update</span>
+          </button>
+          <div class="progress" id="update-progress" hidden>
+            <div class="bar" id="update-progress-bar"></div>
+            <span class="progress-text" id="update-progress-text"></span>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="renderer.js"></script>
+  </body>
+</html>

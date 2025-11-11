@@ -1,0 +1,60 @@
+{
+  "name": "hellas-launcher",
+  "version": "0.1.0",
+  "description": "Hellas Launcher MVP for Windows with dynamic background and one-click updates.",
+  "main": "src/main/main.js",
+  "author": "Hellas Region",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dev": "cross-env NODE_ENV=development electron .",
+    "build": "cross-env NODE_ENV=production electron-builder --win portable",
+    "lint": "eslint ."
+  },
+  "build": {
+    "appId": "com.hellas.launcher",
+    "productName": "Hellas Launcher",
+    "files": [
+      "src/main/**/*",
+      "src/preload/**/*",
+      "src/renderer/**/*",
+      "assets/**/*",
+      "package.json",
+      "package-lock.json",
+      "!dist"
+    ],
+    "directories": {
+      "buildResources": "assets/icons",
+      "output": "dist"
+    },
+    "extraMetadata": {
+      "main": "src/main/main.js"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "portable",
+          "arch": ["x64"]
+        }
+      ],
+      "icon": "assets/icons/icon.png",
+      "artifactName": "Hellas Launcher.exe"
+    }
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.10",
+    "dotenv": "^16.4.5",
+    "electron-store": "^8.2.0",
+    "node-fetch": "^2.6.12",
+    "semver": "^7.6.0"
+  },
+  "devDependencies": {
+    "cross-env": "^7.0.3",
+    "electron": "^28.2.0",
+    "electron-builder": "^24.11.0",
+    "eslint": "^8.57.0"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
