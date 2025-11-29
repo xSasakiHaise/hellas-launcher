@@ -8,6 +8,7 @@ const FORGE_METADATA_URL = 'https://maven.minecraftforge.net/net/minecraftforge/
 const launcher = new Client();
 
 let cachedForgeVersion = null;
+let activeLaunch = null;
 
 async function ensureInstallDirExists(installDir) {
   await fs.mkdir(installDir, { recursive: true });
@@ -64,6 +65,10 @@ async function launchModpack({ installDir, account }) {
     throw new Error('Install directory is missing. Please install the modpack first.');
   }
 
+  if (activeLaunch) {
+    throw new Error('A launch is already in progress. Please wait or cancel it.');
+  }
+
   await ensureInstallDirExists(installDir);
   const gameDirectory = await findGameDirectory(installDir);
   const forgeVersion = await fetchLatestForgeVersion();
@@ -116,8 +121,25 @@ async function launchModpack({ installDir, account }) {
     }
   });
 
-  await launchPromise;
+  activeLaunch = launchPromise.finally(() => {
+    activeLaunch = null;
+  });
+
+  await activeLaunch;
   return { launchedWith: forgeVersion };
 }
 
-module.exports = { launchModpack };
+function cancelLaunch() {
+  if (!activeLaunch) {
+    return false;
+  }
+
+  launcher.kill();
+  return true;
+}
+
+function isLaunching() {
+  return Boolean(activeLaunch);
+}
+
+module.exports = { launchModpack, cancelLaunch, isLaunching };
