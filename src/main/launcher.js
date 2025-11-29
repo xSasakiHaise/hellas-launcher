@@ -15,7 +15,22 @@ async function ensureInstallDirExists(installDir) {
   await fsp.mkdir(installDir, { recursive: true });
 }
 
+async function hasModsDirectory(targetDir) {
+  const modsPath = path.join(targetDir, 'mods');
+  const hasMods = await fsp
+    .readdir(modsPath)
+    .then((entries) => entries.length > 0)
+    .catch(() => false);
+
+  return hasMods;
+}
+
 async function findGameDirectory(installDir) {
+  const modpackDir = path.join(installDir, 'modpack');
+  if (await hasModsDirectory(modpackDir)) {
+    return modpackDir;
+  }
+
   const entries = await fsp.readdir(installDir, { withFileTypes: true });
   const hasModsAtRoot = entries.some(
     (entry) => entry.isDirectory() && entry.name.toLowerCase() === 'mods'
@@ -74,7 +89,9 @@ async function checkLaunchRequirements(installDir) {
   const forgePath = forgeVersion
     ? path.join(installDir, 'versions', forgeVersion, `${forgeVersion}.json`)
     : null;
-  const modsPath = path.join(installDir, 'mods');
+  const modpackDir = path.join(installDir, 'modpack');
+  const modsPath = path.join(modpackDir, 'mods');
+  const fallbackModsPath = path.join(installDir, 'mods');
 
   const minecraftPresent = await fs
     .access(minecraftPath)
@@ -93,13 +110,18 @@ async function checkLaunchRequirements(installDir) {
     .then((entries) => entries.length > 0)
     .catch(() => false);
 
+  const legacyModpackPresent = await fs
+    .readdir(fallbackModsPath)
+    .then((entries) => entries.length > 0)
+    .catch(() => false);
+
   return {
     minecraftVersion,
     forgeVersion,
     requirements: {
       minecraft: minecraftPresent,
       forge: forgePresent,
-      modpack: modpackPresent
+      modpack: modpackPresent || legacyModpackPresent
     }
   };
 }

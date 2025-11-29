@@ -7,6 +7,9 @@ const AdmZip = require('adm-zip');
 
 const DEFAULT_PACK_URL = 'https://hellasregion.com/download/launcher/latest/compact';
 const PROGRESS_PHASE_DOWNLOAD = 80; // percent allocated to download progress
+const MODPACK_DIR_NAME = 'modpack';
+const MODS_DIR_NAME = 'mods';
+const RESOURCEPACKS_DIR_NAME = 'resourcepacks';
 
 function resolveUpdateSource() {
   const feedUrl = (process.env.PACK_FEED_URL || '').trim();
@@ -69,6 +72,47 @@ function ensureNotCancelled(signal) {
   if (signal?.aborted) {
     throw asCancellationError();
   }
+}
+
+async function ensureModpackStructure(targetDir) {
+  const modpackDir = path.join(targetDir, MODPACK_DIR_NAME);
+  const modsDir = path.join(modpackDir, MODS_DIR_NAME);
+  const resourcepacksDir = path.join(modpackDir, RESOURCEPACKS_DIR_NAME);
+
+  await fs.promises.mkdir(modpackDir, { recursive: true });
+  await fs.promises.mkdir(modsDir, { recursive: true });
+  await fs.promises.mkdir(resourcepacksDir, { recursive: true });
+
+  return { modpackDir, modsDir, resourcepacksDir };
+}
+
+async function moveDirectoryContents(sourceDir, destinationDir) {
+  const exists = await fs.promises
+    .stat(sourceDir)
+    .then((stats) => stats.isDirectory())
+    .catch(() => false);
+
+  if (!exists) return false;
+
+  await fs.promises.rm(destinationDir, { recursive: true, force: true });
+  await fs.promises.mkdir(destinationDir, { recursive: true });
+
+  const entries = await fs.promises.readdir(sourceDir);
+  for (const entry of entries) {
+    const from = path.join(sourceDir, entry);
+    const to = path.join(destinationDir, entry);
+    await fs.promises.rename(from, to).catch(async (error) => {
+      if (error.code === 'EXDEV') {
+        await fs.promises.cp(from, to, { recursive: true });
+        await fs.promises.rm(from, { recursive: true, force: true });
+      } else {
+        throw error;
+      }
+    });
+  }
+
+  await fs.promises.rm(sourceDir, { recursive: true, force: true });
+  return true;
 }
 
 async function downloadAndExtractUpdate(source, targetDir, progressCallback = () => {}, abortSignal) {
@@ -173,10 +217,15 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
 
     ensureNotCancelled(abortSignal);
     await fs.promises.mkdir(targetDir, { recursive: true });
+    const { modsDir, resourcepacksDir } = await ensureModpackStructure(targetDir);
     // Preserve other directories by extracting over the install dir, but ensure mods
     // are fully replaced to avoid stale content lingering between updates.
-    const modsDir = path.join(targetDir, 'mods');
+    const legacyModsDir = path.join(targetDir, MODS_DIR_NAME);
+    const legacyResourcepacksDir = path.join(targetDir, RESOURCEPACKS_DIR_NAME);
     await fs.promises.rm(modsDir, { recursive: true, force: true });
+    await fs.promises.rm(resourcepacksDir, { recursive: true, force: true });
+    await fs.promises.rm(legacyModsDir, { recursive: true, force: true });
+    await fs.promises.rm(legacyResourcepacksDir, { recursive: true, force: true });
 
     ensureNotCancelled(abortSignal);
     progressCallback({ state: 'extracting', progress: PROGRESS_PHASE_DOWNLOAD });
@@ -190,6 +239,10 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
     });
     ensureNotCancelled(abortSignal);
     zip.extractAllTo(targetDir, true);
+
+    await ensureModpackStructure(targetDir);
+    await moveDirectoryContents(legacyModsDir, modsDir);
+    await moveDirectoryContents(legacyResourcepacksDir, resourcepacksDir);
 
     progressCallback({ state: 'finalizing', progress: 95 });
   } catch (error) {
