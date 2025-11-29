@@ -93,14 +93,14 @@ function setDropdown(open) {
   menuButton.setAttribute('aria-expanded', expanded);
 }
 
-  function updateStartButtonState() {
-    const { termsAccepted, installation, isUpdating } = launcherState;
-    const requiresInstall = !installation.isInstalled;
-    const buttonLabel = requiresInstall ? 'INSTALL' : 'PLAY';
-    startButton.querySelector('.label').textContent = buttonLabel;
-    startButton.disabled = !termsAccepted || updateInProgress || launchInProgress || isUpdating;
-    startButton.classList.toggle('needs-install', requiresInstall);
-  }
+function updateStartButtonState() {
+  const { termsAccepted, installation, isUpdating } = launcherState;
+  const requiresInstall = !installation.isInstalled;
+  startButton.querySelector('.label').textContent = 'PLAY';
+  startButton.disabled =
+    !termsAccepted || requiresInstall || updateInProgress || launchInProgress || isUpdating;
+  startButton.classList.toggle('needs-install', requiresInstall);
+}
 
 function updateInstallLabels() {
   const { installation } = launcherState;
@@ -126,6 +126,25 @@ function updateInstallLabels() {
   }
 }
 
+function updateUpdateButtonLabel() {
+  const { installation, update } = launcherState;
+  const installRequired = !installation.isInstalled;
+  const updateLabel = updateButton.querySelector('.label');
+
+  if (!update.hasUpdateSource && !installRequired) {
+    updateButton.disabled = true;
+    if (updateLabel) {
+      updateLabel.textContent = 'No Update Source';
+    }
+    return;
+  }
+
+  if (updateLabel) {
+    updateLabel.textContent = installRequired ? 'Install' : 'Update';
+  }
+  updateButton.disabled = false;
+}
+
 function applyAnimationState() {
   if (launcherState.animationEnabled) {
     videoEl.classList.remove('paused');
@@ -138,29 +157,30 @@ function applyAnimationState() {
   }
 }
 
-  function setUpdating(isUpdating, options = {}) {
-    const { resetText = true } = options;
-    updateInProgress = isUpdating;
-    launcherState.isUpdating = isUpdating;
-    startButton.disabled = isUpdating || !launcherState.termsAccepted || launchInProgress;
-    updateButton.disabled = isUpdating;
-    updateProgress.hidden = !isUpdating;
-    updateProgress.classList.remove('error');
-    const updateLabel = updateButton.querySelector('.label');
-    if (isUpdating) {
-      if (updateLabel) updateLabel.textContent = 'Updating…';
-    } else if (updateLabel) {
-      updateLabel.textContent = launcherState.update.hasUpdateSource ? 'Update' : 'No Update Source';
-    }
-    if (!isUpdating && resetText) {
-      updateProgressBar.style.width = '0%';
-      updateProgressText.textContent = '';
-    }
-    if (cancelUpdateButton) {
-      cancelUpdateButton.hidden = !isUpdating;
-      cancelUpdateButton.disabled = !isUpdating;
-    }
+function setUpdating(isUpdating, options = {}) {
+  const { resetText = true, mode = 'update' } = options;
+  updateInProgress = isUpdating;
+  launcherState.isUpdating = isUpdating;
+  startButton.disabled =
+    isUpdating || !launcherState.termsAccepted || !launcherState.installation.isInstalled || launchInProgress;
+  updateButton.disabled = isUpdating;
+  updateProgress.hidden = !isUpdating;
+  updateProgress.classList.remove('error');
+  const updateLabel = updateButton.querySelector('.label');
+  if (isUpdating) {
+    if (updateLabel) updateLabel.textContent = mode === 'install' ? 'Installing…' : 'Updating…';
+  } else {
+    updateUpdateButtonLabel();
   }
+  if (!isUpdating && resetText) {
+    updateProgressBar.style.width = '0%';
+    updateProgressText.textContent = '';
+  }
+  if (cancelUpdateButton) {
+    cancelUpdateButton.hidden = !isUpdating;
+    cancelUpdateButton.disabled = !isUpdating;
+  }
+}
 
 function handleProgress(payload) {
   if (!payload) {
@@ -363,18 +383,7 @@ async function refreshState() {
   updateStartButtonState();
   updateInstallLabels();
   applyAnimationState();
-  const updateLabel = updateButton.querySelector('.label');
-  if (!state.update.hasUpdateSource) {
-    updateButton.disabled = true;
-    if (updateLabel) {
-      updateLabel.textContent = 'No Update Source';
-    }
-  } else {
-    updateButton.disabled = false;
-    if (updateLabel) {
-      updateLabel.textContent = 'Update';
-    }
-  }
+  updateUpdateButtonLabel();
 }
 
 function closeDropdownOnClickOutside(event) {
@@ -485,94 +494,41 @@ if (copyCodeButton) {
 }
 
 startButton.addEventListener('click', async () => {
-  if (!launcherState.termsAccepted) {
+  if (!launcherState.termsAccepted || !launcherState.installation.isInstalled) {
     return;
   }
 
   clearLaunchLog();
 
-  if (!launcherState.installation.isInstalled) {
-    startButton.disabled = true;
-    startButton.querySelector('.label').textContent = 'INSTALLING…';
-    appendLaunchLog('Starting installation…');
-    setUpdating(true);
-    updateProgressText.textContent = 'Preparing…';
-    let preserveProgress = false;
-    try {
-      const result = await window.hellas.performInstall();
-      if (result?.cancelled) {
-        updateProgressText.textContent = 'Install cancelled.';
-        updateProgress.hidden = false;
-        preserveProgress = true;
-        return;
-      }
-      if (result && result.installation) {
-        launcherState.installation = result.installation;
-      }
-      if (result && result.version) {
-        launcherState.update.preferredVersion = result.version;
-        await window.hellas.updateKnownVersion(result.version);
-        launcherState.update.available = false;
-      }
-      updateInstallLabels();
-      updateStartButtonState();
-      appendLaunchLog('Installation completed. Ready to launch.');
-    } catch (error) {
-      console.error(error);
-      if (error?.cancelled || error?.message === 'Update cancelled') {
-        updateProgressText.textContent = 'Install cancelled.';
-        updateProgress.classList.remove('error');
-        preserveProgress = true;
-      } else {
-        updateProgress.classList.add('error');
-        updateProgressText.textContent = error.message || 'Install failed.';
-        setAccountStatus(error.message || 'Install failed.', true);
-        preserveProgress = true;
-      }
-      updateProgress.hidden = false;
-      appendLaunchLog(error.message || 'Install failed.', 'error');
-    } finally {
-      updateStartButtonState();
-      setUpdating(false);
-      setUpdating(false, { resetText: !preserveProgress });
-      startButton.querySelector('.label').textContent = 'PLAY';
-      startButton.disabled = false;
-      updateStartButtonState();
-      if (preserveProgress) {
-        updateProgress.hidden = false;
-      }
-    }
-  } else {
-    if (!launcherState.account.loggedIn) {
-      setAccountStatus('Please log in before launching.', true);
-      appendLaunchLog('Launch blocked: please log in first.', 'error');
-      setAccountPanel(true);
-      return;
-    }
+  if (!launcherState.account.loggedIn) {
+    setAccountStatus('Please log in before launching.', true);
+    appendLaunchLog('Launch blocked: please log in first.', 'error');
+    setAccountPanel(true);
+    return;
+  }
 
-    launchInProgress = true;
+  launchInProgress = true;
+  if (cancelLaunchButton) {
+    cancelLaunchButton.hidden = false;
+    cancelLaunchButton.disabled = false;
+  }
+  startButton.querySelector('.label').textContent = 'LAUNCHING…';
+  appendLaunchLog('Requesting game launch…');
+  try {
+    await window.hellas.launchGame();
+    setAccountStatus('Modpack launch triggered.');
+    appendLaunchLog('Launch request sent. Waiting for game to start…');
+  } catch (error) {
+    console.error(error);
+    setAccountStatus(error.message || 'Failed to launch the modpack.', true);
+    appendLaunchLog(error.message || 'Failed to launch the modpack.', 'error');
+  } finally {
+    launchInProgress = false;
     if (cancelLaunchButton) {
-      cancelLaunchButton.hidden = false;
-      cancelLaunchButton.disabled = false;
+      cancelLaunchButton.hidden = true;
     }
-    startButton.querySelector('.label').textContent = 'LAUNCHING…';
-    appendLaunchLog('Requesting game launch…');
-    try {
-      await window.hellas.launchGame();
-      setAccountStatus('Modpack launch triggered.');
-      appendLaunchLog('Launch request sent. Waiting for game to start…');
-    } catch (error) {
-      console.error(error);
-      setAccountStatus(error.message || 'Failed to launch the modpack.', true);
-      appendLaunchLog(error.message || 'Failed to launch the modpack.', 'error');
-    } finally {
-      launchInProgress = false;
-      if (cancelLaunchButton) {
-        cancelLaunchButton.hidden = true;
-      }
-      startButton.querySelector('.label').textContent = 'PLAY';
-      updateStartButtonState();
-    }
+    startButton.querySelector('.label').textContent = 'PLAY';
+    updateStartButtonState();
   }
 });
 
@@ -581,13 +537,17 @@ updateButton.addEventListener('click', async () => {
     return;
   }
 
-  setUpdating(true);
+  const isInstall = !launcherState.installation.isInstalled;
+  const cancelledMessage = isInstall ? 'Install cancelled.' : 'Update cancelled.';
+  const failureMessage = isInstall ? 'Install failed' : 'Update failed';
+
+  setUpdating(true, { mode: isInstall ? 'install' : 'update' });
   updateProgressText.textContent = 'Preparing…';
   let preserveProgress = false;
   try {
-    const result = await window.hellas.triggerUpdate();
+    const result = isInstall ? await window.hellas.performInstall() : await window.hellas.triggerUpdate();
     if (result?.cancelled) {
-      updateProgressText.textContent = 'Update cancelled.';
+      updateProgressText.textContent = cancelledMessage;
       setUpdating(false, { resetText: false });
       updateProgress.hidden = false;
       preserveProgress = true;
@@ -602,19 +562,25 @@ updateButton.addEventListener('click', async () => {
       launcherState.update.available = false;
       updateInstallLabels();
       updateStartButtonState();
+      if (isInstall) {
+        appendLaunchLog('Installation completed. Ready to launch.');
+      }
     }
     setUpdating(false);
   } catch (error) {
     console.error(error);
     if (error?.cancelled || error?.message === 'Update cancelled') {
       updateProgress.classList.remove('error');
-      updateProgressText.textContent = 'Update cancelled.';
+      updateProgressText.textContent = cancelledMessage;
       setUpdating(false, { resetText: false });
       updateProgress.hidden = false;
       preserveProgress = true;
     } else {
       updateProgress.classList.add('error');
-      updateProgressText.textContent = error.message || 'Update failed';
+      updateProgressText.textContent = error.message || failureMessage;
+      if (isInstall) {
+        setAccountStatus(error.message || 'Install failed.', true);
+      }
       setTimeout(() => {
         setUpdating(false, { resetText: false });
         updateProgress.hidden = false;
