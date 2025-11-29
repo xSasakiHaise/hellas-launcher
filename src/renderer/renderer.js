@@ -5,6 +5,8 @@ const menuButton = document.getElementById('menu-button');
 const accountButton = document.getElementById('account-button');
 const accountUsername = document.getElementById('account-username');
 const closeButton = document.getElementById('close-button');
+const maximizeButton = document.getElementById('maximize-button');
+const topBar = document.querySelector('.top-bar');
 const dropdown = document.getElementById('dropdown');
 const termsCheckbox = document.getElementById('terms-checkbox');
 const startButton = document.getElementById('start-button');
@@ -288,6 +290,25 @@ logoButton.addEventListener('click', () => {
 closeButton.addEventListener('click', () => {
   window.hellas.close();
 });
+
+if (maximizeButton) {
+  maximizeButton.addEventListener('click', () => {
+    window.hellas.toggleMaximize();
+  });
+}
+
+if (topBar) {
+  topBar.addEventListener('dblclick', (event) => {
+    if (
+      event.target.closest('.icon-button') ||
+      event.target.closest('.logo') ||
+      event.target.closest('.dropdown')
+    ) {
+      return;
+    }
+    window.hellas.toggleMaximize();
+  });
+}
 
 termsCheckbox.addEventListener('change', async (event) => {
   const checked = event.target.checked;
