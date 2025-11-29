@@ -44,11 +44,43 @@ function Ensure-NpmDependencies {
   }
 }
 
+function Add-DefaultNodePath {
+  # Try to add a standard Windows install location for Node.js to PATH if it's missing.
+  # Returns $true if a path was added and $false otherwise.
+  $defaultNodeDirs = @(
+    Join-Path $env:ProgramFiles "nodejs",
+    Join-Path $env:"ProgramFiles(x86)" "nodejs"
+  ) | Where-Object { $_ }
+
+  foreach ($dir in $defaultNodeDirs) {
+    $nodeExe = Join-Path $dir "node.exe"
+    if (-not (Test-Path $nodeExe)) { continue }
+
+    $pathEntries = $env:Path -split ";"
+    if ($pathEntries -notcontains $dir) {
+      $env:Path = "$dir;" + $env:Path
+      Write-Host "Detected Node.js at $dir and added it to PATH for this session." -ForegroundColor Yellow
+    }
+
+    return $true
+  }
+
+  return $false
+}
+
 Write-Host "== Hellas Launcher Build ==" -ForegroundColor Cyan
 
-Ensure-Command node "Install Node.js LTS (includes npm) from https://nodejs.org/en/download and re-run this script."
+$nodeHint = "Install Node.js LTS (includes npm) from https://nodejs.org/en/download and re-run this script."
+
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
+  if ($IsWindows -and (Add-DefaultNodePath)) {
+    Write-Host "Retrying Node.js detection after updating PATH..." -ForegroundColor Cyan
+  }
+}
+
+Ensure-Command node $nodeHint
 node -v | Out-Null
-Ensure-Command npm "Install Node.js LTS (includes npm) from https://nodejs.org/en/download and re-run this script."
+Ensure-Command npm $nodeHint
 
 if (-not (Test-Path ".env")) {
   Copy-Item ".env.example" ".env"
