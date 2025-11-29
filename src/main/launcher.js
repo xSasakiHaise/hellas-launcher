@@ -5,9 +5,7 @@ const fsp = fs.promises;
 const { Client } = require('minecraft-launcher-core');
 
 const DEFAULT_MC_VERSION = '1.16.5';
-const MOJANG_MANIFEST_URL = 'https://launchermeta.mojang.com/mc/game/version_manifest.json';
 const FORGE_METADATA_URL = 'https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml';
-const FORGE_BASE_URL = 'https://maven.minecraftforge.net/net/minecraftforge/forge';
 const launcher = new Client();
 
 let cachedForgeVersion = null;
@@ -182,7 +180,7 @@ async function launchModpack({ installDir, account, onStatus = () => {} }) {
       number: DEFAULT_MC_VERSION,
       type: 'release'
     },
-    forge: forgeInstallerPath,
+    forge: forgeVersion,
     memory: {
       max: process.env.MC_MEMORY_MAX || '4096',
       min: process.env.MC_MEMORY_MIN || '2048'
@@ -197,7 +195,6 @@ async function launchModpack({ installDir, account, onStatus = () => {} }) {
   return { launchedWith: forgeVersion };
 }
 
-module.exports = { launchModpack, checkLaunchRequirements };
 function cancelLaunch() {
   if (!activeLaunch) {
     return false;
@@ -211,4 +208,4 @@ function isLaunching() {
   return Boolean(activeLaunch);
 }
 
-module.exports = { launchModpack, cancelLaunch, isLaunching };
+module.exports = { launchModpack, cancelLaunch, isLaunching, checkLaunchRequirements };
