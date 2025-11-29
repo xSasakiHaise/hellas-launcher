@@ -18,7 +18,7 @@
     <div class="overlay">
       <header class="top-bar">
         <button class="logo" id="logo-button" title="Open Hellasregion.com">
-          <span class="logo-text">Hellas</span>
+          <img src="../../assets/icons/icon.png" alt="Hellas logo" />
         </button>
         <div class="menu">
           <button id="account-button" class="icon-button" aria-haspopup="true" aria-expanded="false">
@@ -26,6 +26,9 @@
           </button>
           <button id="menu-button" class="icon-button" aria-haspopup="true" aria-expanded="false">
             <span class="icon menu"></span>
+          </button>
+          <button id="close-button" class="icon-button close-button" title="Close">
+            <span aria-hidden="true">×</span>
           </button>
           <nav id="dropdown" class="dropdown" aria-label="Launcher menu">
             <ul>
@@ -42,6 +45,24 @@
           <div class="card-header">
             <h1>Hellas Launcher</h1>
             <p class="subtitle">Enter the Hellas Region</p>
+          </div>
+          <div class="account-panel">
+            <p class="account-note">Sign in with your Microsoft account to verify Minecraft ownership. You’ll stay signed in on this device.</p>
+            <div class="account-actions">
+              <button id="login-button" class="secondary small">Sign in with Microsoft</button>
+              <span id="account-status" class="account-status" role="status"></span>
+            </div>
+            <div class="device-login" id="device-login" hidden>
+              <p>Enter this code at the Microsoft sign-in page:</p>
+              <div class="code-row">
+                <code id="user-code"></code>
+                <button id="copy-code" class="tertiary small" type="button">Copy</button>
+              </div>
+              <div class="device-actions">
+                <button id="open-login" class="secondary small" type="button">Open login.microsoft.com</button>
+                <span id="device-message" class="device-message" role="status"></span>
+              </div>
+            </div>
           </div>
           <div class="status-row">
             <span id="install-state">Checking installation…</span>

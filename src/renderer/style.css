@@ -75,7 +75,7 @@ body {
   border-radius: 999px;
   color: var(--text);
   font-size: 18px;
-  padding: 12px 24px;
+  padding: 8px 16px;
   cursor: pointer;
   transition: background 0.2s ease, transform 0.2s ease;
 }
@@ -83,6 +83,12 @@ body {
 .logo:hover {
   background: rgba(0, 0, 0, 0.55);
   transform: translateY(-1px);
+}
+
+.logo img {
+  width: 32px;
+  height: 32px;
+  display: block;
 }
 
 .menu {
@@ -123,6 +129,12 @@ body {
 
 .icon.account {
   background-position: -18px 0;
+}
+
+.close-button {
+  font-size: 20px;
+  line-height: 1;
+  color: var(--text);
 }
 
 .dropdown {
@@ -197,6 +209,100 @@ body {
   font-size: 16px;
 }
 
+.account-panel {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 16px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.account-panel .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.account-panel label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.account-panel input {
+  height: 38px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  padding: 0 12px;
+}
+
+.account-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.device-login {
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  border-radius: 12px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.device-login p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.code-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.code-row code {
+  background: rgba(255, 255, 255, 0.06);
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 18px;
+  letter-spacing: 1px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.device-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.device-message {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.account-note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.account-status {
+  color: var(--success);
+  font-size: 13px;
+}
+
+.account-status.error {
+  color: var(--danger);
+}
+
 .status-row {
   display: flex;
   justify-content: space-between;
@@ -251,6 +357,28 @@ button.secondary {
   background: rgba(0, 0, 0, 0.35);
   border: 1px solid rgba(255, 255, 255, 0.12);
   color: var(--text);
+}
+
+button.secondary.small {
+  height: 42px;
+  font-size: 14px;
+  padding: 0 14px;
+}
+
+button.tertiary {
+  height: 36px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  padding: 0 12px;
+  font-size: 14px;
+  cursor: pointer;
+  transition: background 0.2s ease;
+}
+
+button.tertiary:hover {
+  background: rgba(255, 255, 255, 0.14);
 }
 
 button.secondary:hover:not(:disabled) {
