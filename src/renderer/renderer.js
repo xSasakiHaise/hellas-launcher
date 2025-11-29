@@ -3,6 +3,7 @@ const fallbackEl = document.getElementById('bg-fallback');
 const logoButton = document.getElementById('logo-button');
 const menuButton = document.getElementById('menu-button');
 const accountButton = document.getElementById('account-button');
+const accountUsername = document.getElementById('account-username');
 const closeButton = document.getElementById('close-button');
 const dropdown = document.getElementById('dropdown');
 const termsCheckbox = document.getElementById('terms-checkbox');
@@ -15,6 +16,7 @@ const updateProgressBar = document.getElementById('update-progress-bar');
 const updateProgressText = document.getElementById('update-progress-text');
 const loginButton = document.getElementById('login-button');
 const accountStatus = document.getElementById('account-status');
+const accountPanel = document.getElementById('account-panel');
 const deviceLoginPanel = document.getElementById('device-login');
 const userCodeEl = document.getElementById('user-code');
 const deviceMessage = document.getElementById('device-message');
@@ -131,6 +133,44 @@ function hideDeviceLogin() {
   userCodeEl.textContent = '';
 }
 
+function updateAccountUi() {
+  const { account } = launcherState;
+  const loggedIn = Boolean(account?.loggedIn);
+  if (accountUsername) {
+    accountUsername.textContent = loggedIn ? account.username : '';
+  }
+  accountButton.classList.toggle('show-name', loggedIn);
+  if (accountPanel) {
+    accountPanel.hidden = loggedIn;
+  }
+  if (loggedIn) {
+    hideDeviceLogin();
+  }
+}
+
+async function startLoginFlow() {
+  hideDeviceLogin();
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  setAccountStatus('Starting Microsoft sign-in…');
+  try {
+    const deviceInfo = await window.hellas.beginDeviceLogin();
+    activeDeviceLogin = deviceInfo;
+    userCodeEl.textContent = deviceInfo.userCode;
+    deviceMessage.textContent = deviceInfo.message || 'Use this code to sign in.';
+    deviceLoginPanel.hidden = false;
+    window.hellas.openExternal(deviceInfo.verificationUri);
+    startPollingForLogin();
+  } catch (error) {
+    console.error(error);
+    setAccountStatus(error.message || 'Failed to start sign-in.', true);
+    hideDeviceLogin();
+  }
+}
+
 function startPollingForLogin(intervalOverride) {
   if (!activeDeviceLogin) return;
   const currentInterval = intervalOverride || Math.max(5000, (activeDeviceLogin.interval || 5) * 1000);
@@ -169,6 +209,7 @@ function startPollingForLogin(intervalOverride) {
         hideDeviceLogin();
         launcherState.account = result.account;
         setAccountStatus(`Logged in as ${result.account.username}`);
+        updateAccountUi();
         updateStartButtonState();
         clearInterval(pollTimer);
         pollTimer = null;
@@ -191,6 +232,7 @@ async function refreshState() {
   } else {
     setAccountStatus('Not logged in', true);
   }
+  updateAccountUi();
   updateStartButtonState();
   updateInstallLabels();
   applyAnimationState();
@@ -226,8 +268,13 @@ menuButton.addEventListener('click', () => {
   setDropdown(!dropdown.classList.contains('open'));
 });
 
-accountButton.addEventListener('click', () => {
-  setDropdown(!dropdown.classList.contains('open'));
+accountButton.addEventListener('click', async () => {
+  if (launcherState.account.loggedIn) {
+    setAccountStatus(`Logged in as ${launcherState.account.username}`);
+    accountButton.classList.add('show-name');
+    return;
+  }
+  await startLoginFlow();
 });
 
 logoButton.addEventListener('click', () => {
@@ -244,28 +291,7 @@ termsCheckbox.addEventListener('change', async (event) => {
   updateStartButtonState();
 });
 
-loginButton.addEventListener('click', async () => {
-  hideDeviceLogin();
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-
-  setAccountStatus('Starting Microsoft sign-in…');
-  try {
-    const deviceInfo = await window.hellas.beginDeviceLogin();
-    activeDeviceLogin = deviceInfo;
-    userCodeEl.textContent = deviceInfo.userCode;
-    deviceMessage.textContent = deviceInfo.message || 'Use this code to sign in.';
-    deviceLoginPanel.hidden = false;
-    window.hellas.openExternal(deviceInfo.verificationUri);
-    startPollingForLogin();
-  } catch (error) {
-    console.error(error);
-    setAccountStatus(error.message || 'Failed to start sign-in.', true);
-    hideDeviceLogin();
-  }
-});
+loginButton.addEventListener('click', startLoginFlow);
 
 if (openLoginButton) {
   openLoginButton.addEventListener('click', () => {
@@ -403,6 +429,7 @@ dropdownActions.forEach((button) => {
         launcherState.account = { username: '', loggedIn: false };
         hideDeviceLogin();
         setAccountStatus('Logged out', true);
+        updateAccountUi();
         updateStartButtonState();
         break;
       default:
@@ -420,6 +447,7 @@ window.hellas.onAccountUpdated((account) => {
   } else {
     setAccountStatus('Not logged in', true);
   }
+  updateAccountUi();
   updateStartButtonState();
 });
 
