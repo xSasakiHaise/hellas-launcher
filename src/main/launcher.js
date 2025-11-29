@@ -15,19 +15,14 @@ async function ensureInstallDirExists(installDir) {
   await fsp.mkdir(installDir, { recursive: true });
 }
 
-async function hasModsDirectory(targetDir) {
-  const modsPath = path.join(targetDir, 'mods');
-  const hasMods = await fsp
-    .readdir(modsPath)
-    .then((entries) => entries.length > 0)
-    .catch(() => false);
-
-  return hasMods;
-}
-
 async function findGameDirectory(installDir) {
   const modpackDir = path.join(installDir, 'modpack');
-  if (await hasModsDirectory(modpackDir)) {
+  const modpackExists = await fsp
+    .stat(modpackDir)
+    .then((stats) => stats.isDirectory())
+    .catch(() => false);
+
+  if (modpackExists) {
     return modpackDir;
   }
 
@@ -142,10 +137,17 @@ async function launchModpack({ installDir, account, onStatus = () => {} }) {
     .filter(([, present]) => !present)
     .map(([key]) => key);
 
-  if (missing.length) {
+  const missingCritical = missing.filter((item) => item === 'modpack');
+  if (missingCritical.length) {
     throw new Error(
-      `Cannot launch yet. Missing components: ${missing.map((item) => item.toUpperCase()).join(', ')}`
+      `Cannot launch yet. Missing components: ${missingCritical
+        .map((item) => item.toUpperCase())
+        .join(', ')}`
     );
+  }
+
+  if (missing.length) {
+    onStatus({ message: 'Downloading missing Minecraft and Forge files...' });
   }
 
   const gameDirectory = await findGameDirectory(installDir);
