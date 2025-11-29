@@ -21,8 +21,9 @@
           <img src="../../assets/icons/icon.png" alt="Hellas logo" />
         </button>
         <div class="menu">
-          <button id="account-button" class="icon-button" aria-haspopup="true" aria-expanded="false">
+          <button id="account-button" class="icon-button account-button" aria-haspopup="true" aria-expanded="false">
             <span class="icon account"></span>
+            <span class="account-name" id="account-username"></span>
           </button>
           <button id="menu-button" class="icon-button" aria-haspopup="true" aria-expanded="false">
             <span class="icon menu"></span>
@@ -47,7 +48,7 @@
             <h1>Hellas Launcher</h1>
             <p class="subtitle">Enter the Hellas Region</p>
           </div>
-          <div class="account-panel">
+          <div class="account-panel" id="account-panel">
             <p class="account-note">Sign in with your Microsoft account to verify Minecraft ownership. You’ll stay signed in on this device.</p>
             <div class="account-actions">
               <button id="login-button" class="secondary small">Sign in with Microsoft</button>
