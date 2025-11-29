@@ -59,14 +59,68 @@ async function fetchLatestForgeVersion() {
   return latest;
 }
 
-async function launchModpack({ installDir, account }) {
+async function checkLaunchRequirements(installDir) {
+  const minecraftVersion = DEFAULT_MC_VERSION;
+  const forgeVersion = await fetchLatestForgeVersion();
+
+  const minecraftPath = path.join(
+    installDir,
+    'versions',
+    minecraftVersion,
+    `${minecraftVersion}.json`
+  );
+  const forgePath = forgeVersion
+    ? path.join(installDir, 'versions', forgeVersion, `${forgeVersion}.json`)
+    : null;
+  const modsPath = path.join(installDir, 'mods');
+
+  const minecraftPresent = await fs
+    .access(minecraftPath)
+    .then(() => true)
+    .catch(() => false);
+
+  const forgePresent = forgePath
+    ? await fs
+        .access(forgePath)
+        .then(() => true)
+        .catch(() => false)
+    : false;
+
+  const modpackPresent = await fs
+    .readdir(modsPath)
+    .then((entries) => entries.length > 0)
+    .catch(() => false);
+
+  return {
+    minecraftVersion,
+    forgeVersion,
+    requirements: {
+      minecraft: minecraftPresent,
+      forge: forgePresent,
+      modpack: modpackPresent
+    }
+  };
+}
+
+async function launchModpack({ installDir, account, onStatus = () => {} }) {
   if (!installDir) {
     throw new Error('Install directory is missing. Please install the modpack first.');
   }
 
   await ensureInstallDirExists(installDir);
+  onStatus({ message: `Checking installation in ${installDir}` });
+  const { requirements, forgeVersion } = await checkLaunchRequirements(installDir);
+  const missing = Object.entries(requirements)
+    .filter(([, present]) => !present)
+    .map(([key]) => key);
+
+  if (missing.length) {
+    throw new Error(
+      `Cannot launch yet. Missing components: ${missing.map((item) => item.toUpperCase()).join(', ')}`
+    );
+  }
+
   const gameDirectory = await findGameDirectory(installDir);
-  const forgeVersion = await fetchLatestForgeVersion();
 
   const auth = {
     access_token: account.accessToken,
@@ -92,15 +146,26 @@ async function launchModpack({ installDir, account }) {
       }
     };
 
+    const onDebug = (line) => {
+      if (line) {
+        onStatus({ message: String(line) });
+      }
+    };
+
     const cleanup = () => {
       launcher.removeListener('error', onError);
       launcher.removeListener('close', onClose);
+      launcher.removeListener('debug', onDebug);
+      launcher.removeListener('data', onDebug);
     };
 
     launcher.on('error', onError);
     launcher.on('close', onClose);
+    launcher.on('debug', onDebug);
+    launcher.on('data', onDebug);
   });
 
+  onStatus({ message: `Launching with Forge ${forgeVersion}` });
   launcher.launch({
     root: installDir,
     authorization: auth,
@@ -120,4 +185,4 @@ async function launchModpack({ installDir, account }) {
   return { launchedWith: forgeVersion };
 }
 
-module.exports = { launchModpack };
+module.exports = { launchModpack, checkLaunchRequirements };

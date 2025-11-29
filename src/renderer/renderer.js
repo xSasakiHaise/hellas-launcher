@@ -26,6 +26,7 @@ const deviceMessage = document.getElementById('device-message');
 const openLoginButton = document.getElementById('open-login');
 const copyCodeButton = document.getElementById('copy-code');
 const closeAccountModal = document.getElementById('close-account-modal');
+const launchLog = document.getElementById('launch-log');
 
 let launcherState = {
   termsAccepted: false,
@@ -33,8 +34,14 @@ let launcherState = {
   installation: {
     isInstalled: false,
     installDir: '',
+    installDirExists: false,
     installedVersion: '',
-    lastKnownVersion: ''
+    lastKnownVersion: '',
+    requirements: {
+      minecraft: false,
+      forge: false,
+      modpack: false
+    }
   },
   account: {
     username: '',
@@ -43,7 +50,8 @@ let launcherState = {
   update: {
     hasUpdateSource: false,
     preferredVersion: null
-  }
+  },
+  isUpdating: false
 };
 
 let activeDeviceLogin = null;
@@ -55,6 +63,26 @@ function setAccountStatus(message, isError = false) {
   accountStatus.classList.toggle('error', Boolean(isError));
 }
 
+function clearLaunchLog() {
+  if (!launchLog) return;
+  launchLog.innerHTML = '';
+  launchLog.classList.remove('error', 'success');
+}
+
+function appendLaunchLog(message, level = 'info') {
+  if (!launchLog || !message) return;
+  const entry = document.createElement('div');
+  entry.classList.add('launch-log-entry');
+  if (level) {
+    entry.classList.add(level);
+    launchLog.classList.toggle('error', level === 'error');
+    launchLog.classList.toggle('success', level === 'success');
+  }
+  entry.textContent = message;
+  launchLog.appendChild(entry);
+  launchLog.scrollTop = launchLog.scrollHeight;
+}
+
 function setDropdown(open) {
   dropdown.classList.toggle('open', open);
   const expanded = open ? 'true' : 'false';
@@ -62,18 +90,28 @@ function setDropdown(open) {
 }
 
 function updateStartButtonState() {
-  const { termsAccepted, installation } = launcherState;
-  const buttonLabel = installation.isInstalled ? 'PLAY' : 'INSTALL';
+  const { termsAccepted, installation, isUpdating } = launcherState;
+  const requiresInstall = !installation.isInstalled;
+  const buttonLabel = requiresInstall ? 'INSTALL' : 'PLAY';
   startButton.querySelector('.label').textContent = buttonLabel;
-  startButton.disabled = !termsAccepted;
-  startButton.classList.toggle('needs-install', !installation.isInstalled);
+  startButton.disabled = !termsAccepted || isUpdating;
+  startButton.classList.toggle('needs-install', requiresInstall);
 }
 
 function updateInstallLabels() {
   const { installation } = launcherState;
-  installStateLabel.textContent = installation.isInstalled
-    ? `Ready in ${installation.installDir}`
-    : 'Install required';
+  const requirements = installation.requirements || {};
+  const missing = ['minecraft', 'forge', 'modpack']
+    .filter((key) => requirements[key] === false)
+    .map((key) => key.charAt(0).toUpperCase() + key.slice(1));
+
+  if (installation.isInstalled) {
+    installStateLabel.textContent = `Ready in ${installation.installDir}`;
+  } else if (installation.installDirExists) {
+    installStateLabel.textContent = missing.length ? `Missing: ${missing.join(', ')}` : 'Install required';
+  } else {
+    installStateLabel.textContent = 'Install required';
+  }
 
   const versionText = launcherState.update.preferredVersion || installation.installedVersion;
   if (versionText) {
@@ -97,6 +135,7 @@ function applyAnimationState() {
 }
 
 function setUpdating(isUpdating) {
+  launcherState.isUpdating = isUpdating;
   startButton.disabled = isUpdating || !launcherState.termsAccepted;
   updateButton.disabled = isUpdating;
   updateProgress.hidden = !isUpdating;
@@ -121,6 +160,7 @@ function handleProgress(payload) {
     updateProgress.classList.add('error');
     updateProgressBar.style.width = '0%';
     updateProgressText.textContent = payload.message || 'Download failed. Please try again.';
+    appendLaunchLog(payload.message || 'Download failed. Please try again.', 'error');
     setUpdating(false);
     updateProgress.hidden = false;
     return;
@@ -129,6 +169,10 @@ function handleProgress(payload) {
   if (payload.state === 'complete') {
     updateProgressBar.style.width = '100%';
     updateProgressText.textContent = payload.version ? `Updated to ${payload.version}` : 'Update complete';
+    appendLaunchLog(
+      payload.version ? `Updated to ${payload.version}` : 'Update complete',
+      'success'
+    );
     setTimeout(() => setUpdating(false), 1500);
     return;
   }
@@ -150,6 +194,16 @@ function handleProgress(payload) {
       }[payload.state] || 'Updating…';
     updateProgressText.textContent = `${stateLabel} ${clamped}%`;
   }
+}
+
+function handleLaunchStatus(payload) {
+  if (!payload) return;
+  appendLaunchLog(payload.message, payload.level || 'info');
+}
+
+function handleInstallStatus(payload) {
+  if (!payload) return;
+  appendLaunchLog(payload.message, payload.level || 'info');
 }
 
 function hideDeviceLogin() {
@@ -404,9 +458,12 @@ startButton.addEventListener('click', async () => {
     return;
   }
 
+  clearLaunchLog();
+
   if (!launcherState.installation.isInstalled) {
     startButton.disabled = true;
     startButton.querySelector('.label').textContent = 'INSTALLING…';
+    appendLaunchLog('Starting installation…');
     setUpdating(true);
     updateProgressText.textContent = 'Preparing…';
     try {
@@ -421,6 +478,7 @@ startButton.addEventListener('click', async () => {
       }
       updateInstallLabels();
       updateStartButtonState();
+      appendLaunchLog('Installation completed. Ready to launch.');
     } catch (error) {
       console.error(error);
       updateProgress.classList.add('error');
@@ -428,26 +486,30 @@ startButton.addEventListener('click', async () => {
       setAccountStatus(error.message || 'Install failed.', true);
       setUpdating(false);
       updateProgress.hidden = false;
+      appendLaunchLog(error.message || 'Install failed.', 'error');
     } finally {
-      startButton.querySelector('.label').textContent = 'PLAY';
-      startButton.disabled = false;
+      updateStartButtonState();
+      setUpdating(false);
     }
   } else {
     if (!launcherState.account.loggedIn) {
       setAccountStatus('Please log in before launching.', true);
+      appendLaunchLog('Launch blocked: please log in first.', 'error');
       setAccountPanel(true);
       return;
     }
 
     startButton.querySelector('.label').textContent = 'LAUNCHING…';
+    appendLaunchLog('Requesting game launch…');
     try {
       await window.hellas.launchGame();
       setAccountStatus('Modpack launch triggered.');
+      appendLaunchLog('Launch request sent. Waiting for game to start…');
     } catch (error) {
       console.error(error);
       setAccountStatus(error.message || 'Failed to launch the modpack.', true);
+      appendLaunchLog(error.message || 'Failed to launch the modpack.', 'error');
     } finally {
-      startButton.querySelector('.label').textContent = 'PLAY';
       updateStartButtonState();
     }
   }
@@ -537,6 +599,8 @@ dropdownActions.forEach((button) => {
 });
 
 window.hellas.onUpdateProgress(handleProgress);
+window.hellas.onLaunchStatus(handleLaunchStatus);
+window.hellas.onInstallStatus(handleInstallStatus);
 
 window.hellas.onAccountUpdated((account) => {
   launcherState.account = account || { username: '', loggedIn: false };
