@@ -58,11 +58,25 @@ async function fetchFeedManifest(feedUrl) {
   };
 }
 
-async function downloadAndExtractUpdate(source, targetDir, progressCallback = () => {}) {
+function asCancellationError(message = 'Update cancelled by user.') {
+  const error = new Error(message);
+  error.name = 'AbortError';
+  error.cancelled = true;
+  return error;
+}
+
+function ensureNotCancelled(signal) {
+  if (signal?.aborted) {
+    throw asCancellationError();
+  }
+}
+
+async function downloadAndExtractUpdate(source, targetDir, progressCallback = () => {}, abortSignal) {
   let resolved = { ...source };
   let tempZipPath = null;
 
   try {
+    ensureNotCancelled(abortSignal);
     if (source.type === 'feed') {
       progressCallback({ state: 'fetching-feed' });
       resolved = await fetchFeedManifest(source.feedUrl);
@@ -74,7 +88,8 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
 
     tempZipPath = path.join(os.tmpdir(), `hellas-update-${Date.now()}.zip`);
     let response = await fetch(resolved.url, {
-      headers: { 'Cache-Control': 'no-cache' }
+      headers: { 'Cache-Control': 'no-cache' },
+      signal: abortSignal
     });
 
     if (!response.ok) {
@@ -92,7 +107,7 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
       resolved.version = pack.version || resolved.version || null;
       resolved.sha256 = pack.sha256 || pack.hash || resolved.sha256 || null;
 
-      response = await fetch(resolved.url);
+      response = await fetch(resolved.url, { signal: abortSignal });
       if (!response.ok) {
         throw new Error(`Failed to download update archive (${response.status})`);
       }
@@ -104,6 +119,21 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
 
     await new Promise((resolve, reject) => {
       const fileStream = fs.createWriteStream(tempZipPath);
+
+      const handleAbort = () => {
+        const abortError = asCancellationError();
+        response.body.destroy(abortError);
+        fileStream.destroy(abortError);
+        reject(abortError);
+      };
+
+      if (abortSignal) {
+        if (abortSignal.aborted) {
+          handleAbort();
+          return;
+        }
+        abortSignal.addEventListener('abort', handleAbort, { once: true });
+      }
 
       response.body.on('data', (chunk) => {
         downloaded += chunk.length;
@@ -141,7 +171,14 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
       response.body.pipe(fileStream);
     });
 
+    ensureNotCancelled(abortSignal);
     await fs.promises.mkdir(targetDir, { recursive: true });
+    // Preserve other directories by extracting over the install dir, but ensure mods
+    // are fully replaced to avoid stale content lingering between updates.
+    const modsDir = path.join(targetDir, 'mods');
+    await fs.promises.rm(modsDir, { recursive: true, force: true });
+
+    ensureNotCancelled(abortSignal);
     progressCallback({ state: 'extracting', progress: PROGRESS_PHASE_DOWNLOAD });
 
     const zip = new AdmZip(tempZipPath);
@@ -151,10 +188,15 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
         fs.mkdirSync(entryPath, { recursive: true });
       }
     });
+    ensureNotCancelled(abortSignal);
     zip.extractAllTo(targetDir, true);
 
     progressCallback({ state: 'finalizing', progress: 95 });
   } catch (error) {
+    if (error.cancelled || error.name === 'AbortError') {
+      progressCallback({ state: 'cancelled', message: 'Update cancelled.' });
+      throw error;
+    }
     progressCallback({ state: 'error', message: error.message || 'Update failed' });
     throw error;
   } finally {
@@ -166,7 +208,7 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
   return { version: resolved.version || null };
 }
 
-async function freshReinstall(targetDir, progressCallback = () => {}) {
+async function freshReinstall(targetDir, progressCallback = () => {}, abortSignal) {
   const updateSource = resolveUpdateSource();
   if (!updateSource || !updateSource.url) {
     throw new Error('Update source is not configured.');
@@ -174,7 +216,7 @@ async function freshReinstall(targetDir, progressCallback = () => {}) {
 
   await fs.promises.rm(targetDir, { recursive: true, force: true });
 
-  return downloadAndExtractUpdate(updateSource, targetDir, progressCallback);
+  return downloadAndExtractUpdate(updateSource, targetDir, progressCallback, abortSignal);
 }
 
 module.exports = {

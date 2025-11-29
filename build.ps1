@@ -49,7 +49,7 @@ function Add-DefaultNodePath {
   # Try to add a standard Windows install location for Node.js to PATH if it's missing.
   # Returns $true if a path was added and $false otherwise.
   $defaultNodeDirs = @(
-    Join-Path $env:ProgramFiles "nodejs",
+    Join-Path $env:ProgramFiles "nodejs"
     Join-Path ${env:ProgramFiles(x86)} "nodejs"
   ) | Where-Object { $_ }
 
