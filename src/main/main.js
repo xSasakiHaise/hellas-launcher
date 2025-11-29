@@ -114,9 +114,10 @@ async function getInstallationState() {
   let requirements = { minecraft: false, forge: false, modpack: false };
   let forgeVersion = null;
   let minecraftVersion = null;
+  const expectedModpackVersion = store.get('lastKnownVersion') || store.get('installedVersion') || null;
 
   try {
-    const check = await checkLaunchRequirements(dir);
+    const check = await checkLaunchRequirements(dir, expectedModpackVersion);
     requirements = check.requirements;
     forgeVersion = check.forgeVersion;
     minecraftVersion = check.minecraftVersion;
@@ -126,15 +127,17 @@ async function getInstallationState() {
 
   const installedVersion = store.get('installedVersion') || '';
   const lastKnownVersion = store.get('lastKnownVersion') || '';
+  const resolvedInstalledVersion =
+    installedVersion || (requirements.modpack ? expectedModpackVersion : '') || lastKnownVersion;
   // Consider the installation launch-ready once the modpack content is present; the
   // launcher can download missing Minecraft/Forge files on demand during launch.
-  const readyToLaunch = installDirExists && Boolean(installedVersion) && Boolean(requirements.modpack);
+  const readyToLaunch = installDirExists && Boolean(resolvedInstalledVersion) && Boolean(requirements.modpack);
 
   return {
     installDir: dir,
     installDirExists,
     isInstalled: readyToLaunch,
-    installedVersion,
+    installedVersion: resolvedInstalledVersion || installedVersion,
     lastKnownVersion,
     requirements,
     forgeVersion,
@@ -418,6 +421,8 @@ ipcMain.handle('hellas:logout', async () => {
 
   const installDir = getInstallDir();
   const installation = await getInstallationState();
+  const expectedModpackVersion =
+    installation.lastKnownVersion || installation.installedVersion || null;
 
   if (!installation.isInstalled) {
     sendLaunchStatus({
@@ -437,7 +442,8 @@ ipcMain.handle('hellas:logout', async () => {
       const { launchedWith } = await launchModpack({
         installDir,
         account,
-        onStatus: sendLaunchStatus
+        onStatus: sendLaunchStatus,
+        expectedModpackVersion
       });
       sendLaunchStatus({ message: `Launch completed with Forge ${launchedWith}`, level: 'success' });
       return { account: { username: account.username }, installDir, launchedWith };
