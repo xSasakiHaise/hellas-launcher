@@ -209,6 +209,21 @@ body {
   background: rgba(255, 255, 255, 0.08);
 }
 
+.account-panel.popover {
+  position: absolute;
+  top: 54px;
+  right: 0;
+  width: 360px;
+  max-width: min(360px, calc(100vw - 24px));
+  background: var(--surface-strong);
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.4);
+  z-index: 10;
+}
+
+.account-panel.popover[hidden] {
+  display: none;
+}
+
 .content {
   flex: 1;
   display: flex;
