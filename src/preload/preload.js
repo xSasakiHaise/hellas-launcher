@@ -29,5 +29,19 @@ contextBridge.exposeInMainWorld('hellas', {
     ipcRenderer.on(channel, (_event, payload) => {
       callback(payload);
     });
+  },
+  onLaunchStatus: (callback) => {
+    const channel = 'hellas:launch-status';
+    ipcRenderer.removeAllListeners(channel);
+    ipcRenderer.on(channel, (_event, payload) => {
+      callback(payload);
+    });
+  },
+  onInstallStatus: (callback) => {
+    const channel = 'hellas:install-status';
+    ipcRenderer.removeAllListeners(channel);
+    ipcRenderer.on(channel, (_event, payload) => {
+      callback(payload);
+    });
   }
 });
