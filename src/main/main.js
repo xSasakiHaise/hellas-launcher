@@ -1,18 +1,26 @@
 const path = require('path');
 const fs = require('fs');
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const Store = require('electron-store');
 const semver = require('semver');
 require('dotenv').config();
 
 const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall } = require('./update');
 const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
-const { launchModpack, checkLaunchRequirements, ensureBaseDependencies } = require('./launcher');
+const { launchModpack, checkLaunchRequirements } = require('./launcher');
+const { launchModpack, cancelLaunch, isLaunching } = require('./launcher');
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 let mainWindow;
 let store;
 let sessionAccount = { username: '', accessToken: '', refreshToken: '', uuid: '' };
+let updateAbortController = null;
+let updateInProgress = false;
+let launchInProgress = false;
+
+function setUpdateInProgress(value) {
+  updateInProgress = value;
+}
 
 function createStore() {
   const defaults = {
@@ -151,6 +159,36 @@ function sendLaunchStatus(payload) {
 function sendInstallStatus(payload) {
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('hellas:install-status', payload);
+function cancelActiveUpdate() {
+  if (updateAbortController) {
+    updateAbortController.abort();
+    return true;
+  }
+
+  return false;
+}
+
+async function runUpdateTask(task) {
+  if (updateInProgress) {
+    throw new Error('Another download is already in progress.');
+  }
+
+  updateAbortController = new AbortController();
+  setUpdateInProgress(true);
+
+  try {
+    const result = await task(updateAbortController.signal);
+    return result;
+  } catch (error) {
+    if (error.cancelled || error.name === 'AbortError') {
+      return { cancelled: true };
+    }
+    throw error;
+  } finally {
+    if (updateAbortController) {
+      updateAbortController = null;
+    }
+    setUpdateInProgress(false);
   }
 }
 
@@ -175,6 +213,26 @@ function createWindow() {
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+
+  mainWindow.on('close', (event) => {
+    if (updateInProgress) {
+      const choice = dialog.showMessageBoxSync(mainWindow, {
+        type: 'question',
+        buttons: ['Yes', 'No'],
+        defaultId: 1,
+        cancelId: 1,
+        title: 'Download in progress',
+        message: 'A download is currently in progress. Closing will cancel it. Are you sure you want to exit?'
+      });
+
+      if (choice === 1) {
+        event.preventDefault();
+        return;
+      }
+
+      cancelActiveUpdate();
+    }
+  });
 
   if (isDevelopment) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -291,14 +349,24 @@ ipcMain.handle('hellas:perform-install', async () => {
   sendUpdateProgress({ state: 'downloading', progress: 0 });
   try {
     const result = await downloadAndExtractUpdate(updateSource, dir, sendUpdateProgress);
-    sendInstallStatus({ message: 'Ensuring Minecraft and Forge dependencies…' });
-    await ensureBaseDependencies(dir, sendInstallStatus);
     if (result.version) {
       store.set('installedVersion', result.version);
       store.set('lastKnownVersion', result.version);
     }
     sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
     sendInstallStatus({ message: 'Installation completed successfully.', level: 'success' });
+  const result = await runUpdateTask((signal) =>
+    downloadAndExtractUpdate(updateSource, dir, sendUpdateProgress, signal)
+  );
+  if (result.cancelled) {
+    return { cancelled: true };
+  }
+
+  if (result.version) {
+    store.set('installedVersion', result.version);
+    store.set('lastKnownVersion', result.version);
+  }
+  sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
 
     return { installation: await getInstallationState(), version: result.version || null };
   } catch (error) {
@@ -335,6 +403,8 @@ ipcMain.handle('hellas:close', async () => {
     app.quit();
   }
 });
+
+ipcMain.handle('hellas:cancel-update', async () => cancelActiveUpdate());
 
 ipcMain.handle('hellas:logout', async () => {
   clearSessionAccount();
@@ -373,6 +443,22 @@ ipcMain.handle('hellas:launch-game', async () => {
     sendLaunchStatus({ message: error.message || 'Failed to launch.', level: 'error' });
     throw error;
   }
+  if (launchInProgress || isLaunching()) {
+    throw new Error('A launch is already running.');
+  }
+
+  launchInProgress = true;
+  try {
+    const { launchedWith } = await launchModpack({ installDir, account });
+    return { account: { username: account.username }, installDir, launchedWith };
+  } finally {
+    launchInProgress = false;
+  }
+});
+
+ipcMain.handle('hellas:cancel-launch', async () => {
+  launchInProgress = false;
+  return cancelLaunch();
 });
 
 ipcMain.handle('hellas:trigger-update', async () => {
@@ -387,8 +473,6 @@ ipcMain.handle('hellas:trigger-update', async () => {
   const installDir = getInstallDir();
   try {
     const result = await downloadAndExtractUpdate(updateSource, installDir, sendUpdateProgress);
-    sendInstallStatus({ message: 'Ensuring Minecraft and Forge dependencies…' });
-    await ensureBaseDependencies(installDir, sendInstallStatus);
     if (result.version) {
       store.set('installedVersion', result.version);
       store.set('lastKnownVersion', result.version);
@@ -400,6 +484,16 @@ ipcMain.handle('hellas:trigger-update', async () => {
     sendInstallStatus({ message: error.message || 'Update failed.', level: 'error' });
     sendUpdateProgress({ state: 'error', message: error.message || 'Update failed.' });
     throw error;
+  const result = await runUpdateTask((signal) =>
+    downloadAndExtractUpdate(updateSource, installDir, sendUpdateProgress, signal)
+  );
+  if (result.cancelled) {
+    return { cancelled: true };
+  }
+
+  if (result.version) {
+    store.set('installedVersion', result.version);
+    store.set('lastKnownVersion', result.version);
   }
 });
 
@@ -415,8 +509,6 @@ ipcMain.handle('hellas:fresh-reinstall', async () => {
   const installDir = getInstallDir();
   try {
     const result = await freshReinstall(installDir, sendUpdateProgress);
-    sendInstallStatus({ message: 'Ensuring Minecraft and Forge dependencies…' });
-    await ensureBaseDependencies(installDir, sendInstallStatus);
     if (result.version) {
       store.set('installedVersion', result.version);
       store.set('lastKnownVersion', result.version);
@@ -428,6 +520,14 @@ ipcMain.handle('hellas:fresh-reinstall', async () => {
     sendInstallStatus({ message: error.message || 'Reinstall failed.', level: 'error' });
     sendUpdateProgress({ state: 'error', message: error.message || 'Reinstall failed.' });
     throw error;
+  const result = await runUpdateTask((signal) => freshReinstall(installDir, sendUpdateProgress, signal));
+  if (result.cancelled) {
+    return { cancelled: true };
+  }
+
+  if (result.version) {
+    store.set('installedVersion', result.version);
+    store.set('lastKnownVersion', result.version);
   }
 });
 

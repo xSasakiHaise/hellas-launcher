@@ -11,6 +11,7 @@ const FORGE_BASE_URL = 'https://maven.minecraftforge.net/net/minecraftforge/forg
 const launcher = new Client();
 
 let cachedForgeVersion = null;
+let activeLaunch = null;
 
 async function ensureInstallDirExists(installDir) {
   await fsp.mkdir(installDir, { recursive: true });
@@ -62,141 +63,9 @@ async function fetchLatestForgeVersion() {
   return latest;
 }
 
-async function downloadToFile(url, destination, onProgress = () => {}) {
-  const response = await fetch(url, { headers: { 'Cache-Control': 'no-cache' } });
-  if (!response.ok) {
-    throw new Error(`Failed to download ${url} (${response.status})`);
-  }
-
-  await fsp.mkdir(path.dirname(destination), { recursive: true });
-
-  const total = Number(response.headers.get('content-length') || 0);
-  let downloaded = 0;
-
-  await new Promise((resolve, reject) => {
-    const stream = fs.createWriteStream(destination);
-
-    response.body.on('data', (chunk) => {
-      downloaded += chunk.length;
-      if (total) {
-        const progress = Math.min(100, Math.round((downloaded / total) * 100));
-        onProgress(progress);
-      }
-    });
-
-    response.body.on('error', (err) => {
-      stream.destroy();
-      reject(err);
-    });
-
-    stream.on('error', (err) => {
-      response.body.destroy(err);
-      reject(err);
-    });
-
-    stream.on('finish', resolve);
-
-    response.body.pipe(stream);
-  });
-}
-
-async function downloadMinecraftVersion(installDir, onStatus = () => {}) {
-  const manifestResponse = await fetch(MOJANG_MANIFEST_URL, { headers: { 'Cache-Control': 'no-cache' } });
-  if (!manifestResponse.ok) {
-    throw new Error(`Failed to fetch Minecraft manifest (${manifestResponse.status})`);
-  }
-
-  const manifest = await manifestResponse.json();
-  const versionEntry = manifest.versions.find((entry) => entry.id === DEFAULT_MC_VERSION);
-  if (!versionEntry?.url) {
-    throw new Error(`Minecraft version ${DEFAULT_MC_VERSION} was not found in the manifest.`);
-  }
-
-  const versionJsonResponse = await fetch(versionEntry.url, { headers: { 'Cache-Control': 'no-cache' } });
-  if (!versionJsonResponse.ok) {
-    throw new Error(`Failed to fetch Minecraft version JSON (${versionJsonResponse.status})`);
-  }
-
-  const versionJson = await versionJsonResponse.json();
-  const versionsDir = path.join(installDir, 'versions', DEFAULT_MC_VERSION);
-  const jsonPath = path.join(versionsDir, `${DEFAULT_MC_VERSION}.json`);
-  await fsp.mkdir(versionsDir, { recursive: true });
-  await fsp.writeFile(jsonPath, JSON.stringify(versionJson, null, 2), 'utf8');
-  onStatus({ message: `Minecraft ${DEFAULT_MC_VERSION} manifest saved.` });
-
-  const clientJar = versionJson.downloads?.client;
-  if (clientJar?.url) {
-    const jarPath = path.join(versionsDir, `${DEFAULT_MC_VERSION}.jar`);
-    onStatus({ message: 'Downloading Minecraft client…' });
-    await downloadToFile(clientJar.url, jarPath, () => {});
-    onStatus({ message: `Minecraft ${DEFAULT_MC_VERSION} client ready.`, level: 'success' });
-  } else {
-    onStatus({
-      message: 'Minecraft client URL missing from manifest; vanilla assets will download on first launch.',
-      level: 'error'
-    });
-  }
-
-  if (versionJson.assetIndex?.url) {
-    const assetIndexPath = path.join(installDir, 'assets', 'indexes', `${versionJson.assetIndex.id}.json`);
-    await downloadToFile(versionJson.assetIndex.url, assetIndexPath, () => {});
-  }
-
-  return { version: DEFAULT_MC_VERSION };
-}
-
-async function downloadForgeArtifacts(installDir, onStatus = () => {}) {
-  const forgeVersion = await fetchLatestForgeVersion();
-  const forgeDir = path.join(installDir, 'versions', forgeVersion);
-  const forgeJsonPath = path.join(forgeDir, `${forgeVersion}.json`);
-  const forgeInstallerPath = path.join(forgeDir, `forge-${forgeVersion}-installer.jar`);
-
-  await fsp.mkdir(forgeDir, { recursive: true });
-
-  const forgeJsonUrl = `${FORGE_BASE_URL}/${forgeVersion}/forge-${forgeVersion}.json`;
-  const forgeInstallerUrl = `${FORGE_BASE_URL}/${forgeVersion}/forge-${forgeVersion}-installer.jar`;
-
-  onStatus({ message: `Downloading Forge ${forgeVersion} manifest…` });
-  await downloadToFile(forgeJsonUrl, forgeJsonPath, () => {});
-
-  onStatus({ message: `Downloading Forge ${forgeVersion} installer…` });
-  await downloadToFile(forgeInstallerUrl, forgeInstallerPath, () => {});
-  onStatus({ message: `Forge ${forgeVersion} ready.`, level: 'success' });
-
-  return { forgeVersion, forgeInstallerPath, forgeJsonPath };
-}
-
-async function ensureBaseDependencies(installDir, onStatus = () => {}) {
-  await ensureInstallDirExists(installDir);
-
-  const currentState = await checkLaunchRequirements(installDir).catch(() => ({
-    requirements: { minecraft: false, forge: false }
-  }));
-
-  if (currentState.requirements?.minecraft && currentState.requirements?.forge) {
-    return {
-      minecraftVersion: currentState.minecraftVersion,
-      forgeVersion: currentState.forgeVersion,
-      forgeInstallerPath: currentState.forgeInstallerPath
-    };
-  }
-
-  onStatus({ message: 'Installing required Minecraft and Forge files…' });
-  await downloadMinecraftVersion(installDir, onStatus);
-  const forge = await downloadForgeArtifacts(installDir, onStatus);
-
-  return { minecraftVersion: DEFAULT_MC_VERSION, ...forge };
-}
-
 async function checkLaunchRequirements(installDir) {
   const minecraftVersion = DEFAULT_MC_VERSION;
-  let forgeVersion = null;
-
-  try {
-    forgeVersion = await fetchLatestForgeVersion();
-  } catch (error) {
-    forgeVersion = null;
-  }
+  const forgeVersion = await fetchLatestForgeVersion();
 
   const minecraftPath = path.join(
     installDir,
@@ -204,34 +73,24 @@ async function checkLaunchRequirements(installDir) {
     minecraftVersion,
     `${minecraftVersion}.json`
   );
-  const forgeJsonPath = forgeVersion
+  const forgePath = forgeVersion
     ? path.join(installDir, 'versions', forgeVersion, `${forgeVersion}.json`)
-    : null;
-  const forgeInstallerPath = forgeVersion
-    ? path.join(installDir, 'versions', forgeVersion, `forge-${forgeVersion}-installer.jar`)
     : null;
   const modsPath = path.join(installDir, 'mods');
 
-  const minecraftPresent = await fsp
+  const minecraftPresent = await fs
     .access(minecraftPath)
     .then(() => true)
     .catch(() => false);
 
-  const forgeJsonPresent = forgeJsonPath
-    ? await fsp
-        .access(forgeJsonPath)
+  const forgePresent = forgePath
+    ? await fs
+        .access(forgePath)
         .then(() => true)
         .catch(() => false)
     : false;
 
-  const forgeInstallerPresent = forgeInstallerPath
-    ? await fsp
-        .access(forgeInstallerPath)
-        .then(() => true)
-        .catch(() => false)
-    : false;
-
-  const modpackPresent = await fsp
+  const modpackPresent = await fs
     .readdir(modsPath)
     .then((entries) => entries.length > 0)
     .catch(() => false);
@@ -239,10 +98,9 @@ async function checkLaunchRequirements(installDir) {
   return {
     minecraftVersion,
     forgeVersion,
-    forgeInstallerPath,
     requirements: {
       minecraft: minecraftPresent,
-      forge: forgeJsonPresent && forgeInstallerPresent,
+      forge: forgePresent,
       modpack: modpackPresent
     }
   };
@@ -251,6 +109,10 @@ async function checkLaunchRequirements(installDir) {
 async function launchModpack({ installDir, account, onStatus = () => {} }) {
   if (!installDir) {
     throw new Error('Install directory is missing. Please install the modpack first.');
+  }
+
+  if (activeLaunch) {
+    throw new Error('A launch is already in progress. Please wait or cancel it.');
   }
 
   await ensureInstallDirExists(installDir);
@@ -267,14 +129,6 @@ async function launchModpack({ installDir, account, onStatus = () => {} }) {
   }
 
   const gameDirectory = await findGameDirectory(installDir);
-
-  const forgeInstallerPath = forgeVersion
-    ? path.join(installDir, 'versions', forgeVersion, `forge-${forgeVersion}-installer.jar`)
-    : null;
-
-  if (!forgeInstallerPath || !fs.existsSync(forgeInstallerPath)) {
-    throw new Error('Forge installer is missing. Please reinstall to regenerate Forge files.');
-  }
 
   const auth = {
     access_token: account.accessToken,
@@ -335,8 +189,26 @@ async function launchModpack({ installDir, account, onStatus = () => {} }) {
     }
   });
 
-  await launchPromise;
+  activeLaunch = launchPromise.finally(() => {
+    activeLaunch = null;
+  });
+
+  await activeLaunch;
   return { launchedWith: forgeVersion };
 }
 
-module.exports = { launchModpack, checkLaunchRequirements, ensureBaseDependencies };
+module.exports = { launchModpack, checkLaunchRequirements };
+function cancelLaunch() {
+  if (!activeLaunch) {
+    return false;
+  }
+
+  launcher.kill();
+  return true;
+}
+
+function isLaunching() {
+  return Boolean(activeLaunch);
+}
+
+module.exports = { launchModpack, cancelLaunch, isLaunching };
