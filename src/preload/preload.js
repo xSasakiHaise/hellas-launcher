@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('hellas', {
   getInstallation: () => ipcRenderer.invoke('hellas:get-installation'),
   launchGame: () => ipcRenderer.invoke('hellas:launch-game'),
   updateKnownVersion: (version) => ipcRenderer.invoke('hellas:update-known-version', version),
+  toggleMaximize: () => ipcRenderer.invoke('hellas:toggle-maximize'),
   onUpdateProgress: (callback) => {
     const channel = 'hellas:update-progress';
     ipcRenderer.removeAllListeners(channel);

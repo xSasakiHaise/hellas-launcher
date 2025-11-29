@@ -125,6 +125,8 @@ function createWindow() {
     minWidth: 1100,
     minHeight: 650,
     frame: false,
+    resizable: false,
+    maximizable: true,
     backgroundColor: '#00000000',
     transparent: false,
     webPreferences: {
@@ -263,6 +265,20 @@ ipcMain.handle('hellas:open-external', async (_event, targetUrl) => {
   if (targetUrl) {
     await shell.openExternal(targetUrl);
   }
+});
+
+ipcMain.handle('hellas:toggle-maximize', async () => {
+  if (!mainWindow || mainWindow.isDestroyed()) {
+    return false;
+  }
+
+  if (mainWindow.isMaximized()) {
+    mainWindow.unmaximize();
+    return false;
+  }
+
+  mainWindow.maximize();
+  return true;
 });
 
 ipcMain.handle('hellas:close', async () => {
