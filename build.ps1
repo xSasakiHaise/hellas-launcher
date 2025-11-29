@@ -2,10 +2,13 @@ param([switch]$SkipInstall)
 $ErrorActionPreference = "Stop"
 
 function Ensure-Command {
-  param([Parameter(Mandatory)][string]$Name)
+  param(
+    [Parameter(Mandatory)][string]$Name,
+    [string]$InstallHint = "Install it and re-run this script."
+  )
 
   if (-not (Get-Command $Name -ErrorAction SilentlyContinue)) {
-    throw "$Name not found. Install it and re-run this script."
+    throw "$Name not found. $InstallHint"
   }
 }
 
@@ -43,8 +46,9 @@ function Ensure-NpmDependencies {
 
 Write-Host "== Hellas Launcher Build ==" -ForegroundColor Cyan
 
-Ensure-Command node
+Ensure-Command node "Install Node.js LTS (includes npm) from https://nodejs.org/en/download and re-run this script."
 node -v | Out-Null
+Ensure-Command npm "Install Node.js LTS (includes npm) from https://nodejs.org/en/download and re-run this script."
 
 if (-not (Test-Path ".env")) {
   Copy-Item ".env.example" ".env"
