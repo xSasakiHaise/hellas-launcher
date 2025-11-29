@@ -141,7 +141,11 @@ function updateAccountUi() {
   }
   accountButton.classList.toggle('show-name', loggedIn);
   if (accountPanel) {
-    accountPanel.hidden = loggedIn;
+    accountPanel.hidden = false;
+  }
+  if (loginButton) {
+    loginButton.hidden = loggedIn;
+    loginButton.disabled = loggedIn;
   }
   if (loggedIn) {
     hideDeviceLogin();
