@@ -353,7 +353,7 @@ dropdownActions.forEach((button) => {
     setDropdown(false);
     switch (action) {
       case 'dynmap':
-        await window.hellas.openExternal(launcherState.dynmapUrl || 'https://map.hellasregion.com');
+        await window.hellas.openExternal(launcherState.dynmapUrl || 'https://map.pixelmon-server.com');
         break;
       case 'toggle-animation':
         launcherState.animationEnabled = !launcherState.animationEnabled;
