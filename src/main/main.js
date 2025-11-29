@@ -126,10 +126,9 @@ async function getInstallationState() {
 
   const installedVersion = store.get('installedVersion') || '';
   const lastKnownVersion = store.get('lastKnownVersion') || '';
-  const readyToLaunch =
-    installDirExists &&
-    Boolean(installedVersion) &&
-    Object.values(requirements).every((value) => Boolean(value));
+  // Consider the installation launch-ready once the modpack content is present; the
+  // launcher can download missing Minecraft/Forge files on demand during launch.
+  const readyToLaunch = installDirExists && Boolean(installedVersion) && Boolean(requirements.modpack);
 
   return {
     installDir: dir,
