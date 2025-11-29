@@ -45,6 +45,7 @@
     "adm-zip": "^0.5.10",
     "dotenv": "^16.4.5",
     "electron-store": "^8.2.0",
+    "minecraft-launcher-core": "^3.18.0",
     "node-fetch": "^2.6.12",
     "semver": "^7.6.0"
   },

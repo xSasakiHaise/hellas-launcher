@@ -241,10 +241,22 @@ ipcMain.handle('hellas:poll-device-login', async (_event, payload) => {
 
 ipcMain.handle('hellas:perform-install', async () => {
   const dir = getInstallDir();
+  const updateSource = resolveUpdateSource();
+  if (!updateSource || !updateSource.url) {
+    throw new Error('Update source is not configured.');
+  }
+
   await fs.promises.mkdir(dir, { recursive: true });
-  store.set('installedVersion', store.get('lastKnownVersion'));
-  const installation = getInstallationState();
-  return installation;
+
+  sendUpdateProgress({ state: 'downloading', progress: 0 });
+  const result = await downloadAndExtractUpdate(updateSource, dir, sendUpdateProgress);
+  if (result.version) {
+    store.set('installedVersion', result.version);
+    store.set('lastKnownVersion', result.version);
+  }
+  sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
+
+  return { installation: getInstallationState(), version: result.version || null };
 });
 
 ipcMain.handle('hellas:open-external', async (_event, targetUrl) => {

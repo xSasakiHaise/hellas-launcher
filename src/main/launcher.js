@@ -1,84 +1,123 @@
-const fs = require('fs');
+const fetch = require('node-fetch');
 const path = require('path');
-const { spawn } = require('child_process');
+const { promises: fs } = require('fs');
+const { Client } = require('minecraft-launcher-core');
 
-const LAUNCH_SCRIPT_CANDIDATES = ['launch.bat', 'start.bat', 'run.bat'];
-const MAX_DEPTH = 4;
+const DEFAULT_MC_VERSION = '1.16.5';
+const FORGE_METADATA_URL = 'https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml';
+const launcher = new Client();
 
-function findForgeJar(rootDir) {
-  const stack = [{ dir: rootDir, depth: 0 }];
+let cachedForgeVersion = null;
 
-  while (stack.length) {
-    const { dir, depth } = stack.pop();
-    if (depth > MAX_DEPTH) continue;
-
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
-    for (const entry of entries) {
-      const fullPath = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        stack.push({ dir: fullPath, depth: depth + 1 });
-      } else if (/forge.*\.jar$/i.test(entry.name)) {
-        return fullPath;
-      }
-    }
-  }
-
-  return null;
+async function ensureInstallDirExists(installDir) {
+  await fs.mkdir(installDir, { recursive: true });
 }
 
-function findLaunchTarget(installDir) {
-  for (const candidate of LAUNCH_SCRIPT_CANDIDATES) {
-    const candidatePath = path.join(installDir, candidate);
-    if (fs.existsSync(candidatePath)) {
-      return { type: 'script', path: candidatePath };
+async function findGameDirectory(installDir) {
+  const entries = await fs.readdir(installDir, { withFileTypes: true });
+  const hasModsAtRoot = entries.some(
+    (entry) => entry.isDirectory() && entry.name.toLowerCase() === 'mods'
+  );
+
+  if (hasModsAtRoot) {
+    return installDir;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const potentialDir = path.join(installDir, entry.name);
+    const subEntries = await fs.readdir(potentialDir, { withFileTypes: true }).catch(() => []);
+    const hasMods = subEntries.some(
+      (subEntry) => subEntry.isDirectory() && subEntry.name.toLowerCase() === 'mods'
+    );
+
+    if (hasMods) {
+      return potentialDir;
     }
   }
 
-  const forgeJar = findForgeJar(installDir);
-  if (forgeJar) {
-    return { type: 'jar', path: forgeJar };
+  throw new Error('Modpack files not found in the installation directory. Please reinstall.');
+}
+
+async function fetchLatestForgeVersion() {
+  if (cachedForgeVersion) return cachedForgeVersion;
+
+  const response = await fetch(FORGE_METADATA_URL);
+  if (!response.ok) {
+    throw new Error(`Failed to resolve Forge metadata (${response.status})`);
   }
 
-  return null;
+  const metadata = await response.text();
+  const matches = Array.from(metadata.matchAll(/<version>([^<]+)<\/version>/g)).map((match) => match[1]);
+  const forgeVersions = matches.filter((version) => version.startsWith(`${DEFAULT_MC_VERSION}-`));
+  if (!forgeVersions.length) {
+    throw new Error('No Forge versions found for Minecraft 1.16.5');
+  }
+
+  const latest = forgeVersions[forgeVersions.length - 1];
+  cachedForgeVersion = latest;
+  return latest;
 }
 
 async function launchModpack({ installDir, account }) {
-  if (!installDir || !fs.existsSync(installDir)) {
+  if (!installDir) {
     throw new Error('Install directory is missing. Please install the modpack first.');
   }
 
-  const target = findLaunchTarget(installDir);
-  if (!target) {
-    throw new Error('Forge modpack entry point not found in the installation directory.');
-  }
+  await ensureInstallDirExists(installDir);
+  const gameDirectory = await findGameDirectory(installDir);
+  const forgeVersion = await fetchLatestForgeVersion();
 
-  const env = {
-    ...process.env,
-    MC_USERNAME: account.username,
-    MC_ACCESS_TOKEN: account.accessToken
+  const auth = {
+    access_token: account.accessToken,
+    client_token: '',
+    uuid: account.uuid || account.username,
+    name: account.username,
+    user_properties: '{}',
+    user_type: 'msa'
   };
 
-  let child;
-  if (target.type === 'script') {
-    child = spawn(target.path, [], {
-      cwd: installDir,
-      env,
-      shell: true,
-      detached: true,
-      stdio: 'ignore'
-    });
-  } else {
-    const javaBinary = process.env.JAVA_PATH || 'javaw';
-    child = spawn(javaBinary, ['-jar', target.path], {
-      cwd: path.dirname(target.path),
-      env,
-      detached: true,
-      stdio: 'ignore'
-    });
-  }
+  const launchPromise = new Promise((resolve, reject) => {
+    const onError = (error) => {
+      cleanup();
+      reject(error);
+    };
 
-  child.unref();
-  return { launchedWith: target.path };
+    const onClose = (code) => {
+      cleanup();
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`Minecraft exited with code ${code}`));
+      }
+    };
+
+    const cleanup = () => {
+      launcher.removeListener('error', onError);
+      launcher.removeListener('close', onClose);
+    };
+
+    launcher.on('error', onError);
+    launcher.on('close', onClose);
+  });
+
+  launcher.launch({
+    root: installDir,
+    authorization: auth,
+    gameDirectory,
+    version: {
+      number: DEFAULT_MC_VERSION,
+      type: 'release'
+    },
+    forge: forgeVersion,
+    memory: {
+      max: process.env.MC_MEMORY_MAX || '4096',
+      min: process.env.MC_MEMORY_MIN || '2048'
+    }
+  });
+
+  await launchPromise;
+  return { launchedWith: forgeVersion };
 }
 
 module.exports = { launchModpack };
