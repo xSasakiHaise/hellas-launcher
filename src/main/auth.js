@@ -13,7 +13,8 @@ const DEVICE_SCOPE = 'XboxLive.signin offline_access';
 async function requestDeviceCode() {
   const params = new URLSearchParams({
     client_id: MICROSOFT_CLIENT_ID,
-    scope: DEVICE_SCOPE
+    scope: DEVICE_SCOPE,
+    response_type: 'device_code'
   });
 
   const response = await fetch(DEVICE_CODE_URL, {
