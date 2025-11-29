@@ -46,7 +46,7 @@ async function exchangeDeviceCode(deviceCode) {
   const params = new URLSearchParams({
     grant_type: 'device_code',
     client_id: MICROSOFT_CLIENT_ID,
-    code: deviceCode
+    device_code: deviceCode
   });
 
   const response = await fetch(TOKEN_URL, {

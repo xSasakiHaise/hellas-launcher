@@ -199,7 +199,7 @@ ipcMain.handle('hellas:get-state', async () => {
 
   return {
     websiteUrl: process.env.WEBSITE_URL || 'https://hellasregion.com',
-    dynmapUrl: process.env.DYNMAP_URL || 'https://map.hellasregion.com',
+    dynmapUrl: process.env.DYNMAP_URL || 'https://map.pixelmon-server.com',
     installation,
     account: getAccount(),
     termsAccepted: store.get('termsAccepted'),
