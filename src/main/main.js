@@ -114,9 +114,10 @@ async function getInstallationState() {
   let requirements = { minecraft: false, forge: false, modpack: false };
   let forgeVersion = null;
   let minecraftVersion = null;
+  const expectedModpackVersion = store.get('lastKnownVersion') || store.get('installedVersion') || null;
 
   try {
-    const check = await checkLaunchRequirements(dir);
+    const check = await checkLaunchRequirements(dir, expectedModpackVersion);
     requirements = check.requirements;
     forgeVersion = check.forgeVersion;
     minecraftVersion = check.minecraftVersion;
@@ -418,6 +419,8 @@ ipcMain.handle('hellas:logout', async () => {
 
   const installDir = getInstallDir();
   const installation = await getInstallationState();
+  const expectedModpackVersion =
+    installation.lastKnownVersion || installation.installedVersion || null;
 
   if (!installation.isInstalled) {
     sendLaunchStatus({
@@ -437,7 +440,8 @@ ipcMain.handle('hellas:logout', async () => {
       const { launchedWith } = await launchModpack({
         installDir,
         account,
-        onStatus: sendLaunchStatus
+        onStatus: sendLaunchStatus,
+        expectedModpackVersion
       });
       sendLaunchStatus({ message: `Launch completed with Forge ${launchedWith}`, level: 'success' });
       return { account: { username: account.username }, installDir, launchedWith };
