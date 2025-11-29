@@ -7,6 +7,7 @@ require('dotenv').config();
 
 const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall } = require('./update');
 const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
+const { launchModpack, checkLaunchRequirements } = require('./launcher');
 const { launchModpack, cancelLaunch, isLaunching } = require('./launcher');
 
 const isDevelopment = process.env.NODE_ENV === 'development';
@@ -108,14 +109,38 @@ async function attemptRestoreAccount() {
   }
 }
 
-function getInstallationState() {
+async function getInstallationState() {
   const dir = getInstallDir();
-  const exists = fs.existsSync(dir);
+  const installDirExists = fs.existsSync(dir);
+  let requirements = { minecraft: false, forge: false, modpack: false };
+  let forgeVersion = null;
+  let minecraftVersion = null;
+
+  try {
+    const check = await checkLaunchRequirements(dir);
+    requirements = check.requirements;
+    forgeVersion = check.forgeVersion;
+    minecraftVersion = check.minecraftVersion;
+  } catch (error) {
+    console.warn('Unable to verify installation readiness', error);
+  }
+
+  const installedVersion = store.get('installedVersion') || '';
+  const lastKnownVersion = store.get('lastKnownVersion') || '';
+  const readyToLaunch =
+    installDirExists &&
+    Boolean(installedVersion) &&
+    Object.values(requirements).every((value) => Boolean(value));
+
   return {
     installDir: dir,
-    isInstalled: exists,
-    installedVersion: store.get('installedVersion') || '',
-    lastKnownVersion: store.get('lastKnownVersion') || ''
+    installDirExists,
+    isInstalled: readyToLaunch,
+    installedVersion,
+    lastKnownVersion,
+    requirements,
+    forgeVersion,
+    minecraftVersion
   };
 }
 
@@ -125,6 +150,15 @@ function sendUpdateProgress(payload) {
   }
 }
 
+function sendLaunchStatus(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('hellas:launch-status', payload);
+  }
+}
+
+function sendInstallStatus(payload) {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('hellas:install-status', payload);
 function cancelActiveUpdate() {
   if (updateAbortController) {
     updateAbortController.abort();
@@ -224,7 +258,7 @@ app.on('window-all-closed', () => {
 });
 
 ipcMain.handle('hellas:get-state', async () => {
-  const installation = getInstallationState();
+  const installation = await getInstallationState();
   const updateSource = resolveUpdateSource();
   let preferredVersion = installation.lastKnownVersion;
 
@@ -305,12 +339,22 @@ ipcMain.handle('hellas:perform-install', async () => {
   const dir = getInstallDir();
   const updateSource = resolveUpdateSource();
   if (!updateSource || !updateSource.url) {
+    sendInstallStatus({ message: 'Update source is not configured.', level: 'error' });
     throw new Error('Update source is not configured.');
   }
 
   await fs.promises.mkdir(dir, { recursive: true });
 
+  sendInstallStatus({ message: `Preparing installation into ${dir}` });
   sendUpdateProgress({ state: 'downloading', progress: 0 });
+  try {
+    const result = await downloadAndExtractUpdate(updateSource, dir, sendUpdateProgress);
+    if (result.version) {
+      store.set('installedVersion', result.version);
+      store.set('lastKnownVersion', result.version);
+    }
+    sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
+    sendInstallStatus({ message: 'Installation completed successfully.', level: 'success' });
   const result = await runUpdateTask((signal) =>
     downloadAndExtractUpdate(updateSource, dir, sendUpdateProgress, signal)
   );
@@ -324,7 +368,12 @@ ipcMain.handle('hellas:perform-install', async () => {
   }
   sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
 
-  return { installation: getInstallationState(), version: result.version || null };
+    return { installation: await getInstallationState(), version: result.version || null };
+  } catch (error) {
+    sendInstallStatus({ message: error.message || 'Installation failed.', level: 'error' });
+    sendUpdateProgress({ state: 'error', message: error.message || 'Installation failed.' });
+    throw error;
+  }
 });
 
 ipcMain.handle('hellas:open-external', async (_event, targetUrl) => {
@@ -371,6 +420,29 @@ ipcMain.handle('hellas:launch-game', async () => {
   }
 
   const installDir = getInstallDir();
+  const installation = await getInstallationState();
+
+  if (!installation.isInstalled) {
+    sendLaunchStatus({
+      message: 'Launch blocked: install the modpack before starting.',
+      level: 'error'
+    });
+    throw new Error('Cannot launch until the modpack and dependencies are installed.');
+  }
+
+  sendLaunchStatus({ message: 'Starting Minecraft launch…' });
+  try {
+    const { launchedWith } = await launchModpack({
+      installDir,
+      account,
+      onStatus: sendLaunchStatus
+    });
+    sendLaunchStatus({ message: `Launch completed with Forge ${launchedWith}`, level: 'success' });
+    return { account: { username: account.username }, installDir, launchedWith };
+  } catch (error) {
+    sendLaunchStatus({ message: error.message || 'Failed to launch.', level: 'error' });
+    throw error;
+  }
   if (launchInProgress || isLaunching()) {
     throw new Error('A launch is already running.');
   }
@@ -392,11 +464,26 @@ ipcMain.handle('hellas:cancel-launch', async () => {
 ipcMain.handle('hellas:trigger-update', async () => {
   const updateSource = resolveUpdateSource();
   if (!updateSource || !updateSource.url) {
+    sendInstallStatus({ message: 'Update source is not configured.', level: 'error' });
     throw new Error('Update source is not configured.');
   }
 
+  sendInstallStatus({ message: 'Starting update…' });
   sendUpdateProgress({ state: 'downloading', progress: 0 });
   const installDir = getInstallDir();
+  try {
+    const result = await downloadAndExtractUpdate(updateSource, installDir, sendUpdateProgress);
+    if (result.version) {
+      store.set('installedVersion', result.version);
+      store.set('lastKnownVersion', result.version);
+    }
+    sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
+    sendInstallStatus({ message: 'Update completed.', level: 'success' });
+    return { installation: await getInstallationState(), version: result.version || null };
+  } catch (error) {
+    sendInstallStatus({ message: error.message || 'Update failed.', level: 'error' });
+    sendUpdateProgress({ state: 'error', message: error.message || 'Update failed.' });
+    throw error;
   const result = await runUpdateTask((signal) =>
     downloadAndExtractUpdate(updateSource, installDir, sendUpdateProgress, signal)
   );
@@ -408,18 +495,31 @@ ipcMain.handle('hellas:trigger-update', async () => {
     store.set('installedVersion', result.version);
     store.set('lastKnownVersion', result.version);
   }
-  sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
-  return { installation: getInstallationState(), version: result.version || null };
 });
 
 ipcMain.handle('hellas:fresh-reinstall', async () => {
   const updateSource = resolveUpdateSource();
   if (!updateSource || !updateSource.url) {
+    sendInstallStatus({ message: 'Update source is not configured.', level: 'error' });
     throw new Error('Update source is not configured.');
   }
 
+  sendInstallStatus({ message: 'Starting fresh reinstall…' });
   sendUpdateProgress({ state: 'downloading', progress: 0 });
   const installDir = getInstallDir();
+  try {
+    const result = await freshReinstall(installDir, sendUpdateProgress);
+    if (result.version) {
+      store.set('installedVersion', result.version);
+      store.set('lastKnownVersion', result.version);
+    }
+    sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
+    sendInstallStatus({ message: 'Reinstall finished.', level: 'success' });
+    return { installation: await getInstallationState(), version: result.version || null };
+  } catch (error) {
+    sendInstallStatus({ message: error.message || 'Reinstall failed.', level: 'error' });
+    sendUpdateProgress({ state: 'error', message: error.message || 'Reinstall failed.' });
+    throw error;
   const result = await runUpdateTask((signal) => freshReinstall(installDir, sendUpdateProgress, signal));
   if (result.cancelled) {
     return { cancelled: true };
@@ -429,8 +529,6 @@ ipcMain.handle('hellas:fresh-reinstall', async () => {
     store.set('installedVersion', result.version);
     store.set('lastKnownVersion', result.version);
   }
-  sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
-  return { installation: getInstallationState(), version: result.version || null };
 });
 
 ipcMain.handle('hellas:get-installation', async () => getInstallationState());

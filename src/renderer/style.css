@@ -256,6 +256,40 @@ body {
   width: 100%;
 }
 
+.launch-log {
+  width: 100%;
+  max-height: 140px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  padding: 10px 12px;
+  overflow-y: auto;
+  font-family: 'SFMono-Regular', 'Consolas', 'Liberation Mono', monospace;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.launch-log.error {
+  border-color: rgba(255, 100, 100, 0.7);
+}
+
+.launch-log.success {
+  border-color: rgba(115, 255, 145, 0.7);
+}
+
+.launch-log-entry {
+  margin: 2px 0;
+}
+
+.launch-log-entry.error {
+  color: var(--danger);
+}
+
+.launch-log-entry.success {
+  color: var(--success);
+}
+
 .card-header h1 {
   margin: 0;
   font-size: 32px;
