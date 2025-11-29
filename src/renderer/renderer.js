@@ -3,6 +3,7 @@ const fallbackEl = document.getElementById('bg-fallback');
 const logoButton = document.getElementById('logo-button');
 const menuButton = document.getElementById('menu-button');
 const accountButton = document.getElementById('account-button');
+const closeButton = document.getElementById('close-button');
 const dropdown = document.getElementById('dropdown');
 const termsCheckbox = document.getElementById('terms-checkbox');
 const startButton = document.getElementById('start-button');
@@ -12,6 +13,13 @@ const versionLabel = document.getElementById('version-label');
 const updateProgress = document.getElementById('update-progress');
 const updateProgressBar = document.getElementById('update-progress-bar');
 const updateProgressText = document.getElementById('update-progress-text');
+const loginButton = document.getElementById('login-button');
+const accountStatus = document.getElementById('account-status');
+const deviceLoginPanel = document.getElementById('device-login');
+const userCodeEl = document.getElementById('user-code');
+const deviceMessage = document.getElementById('device-message');
+const openLoginButton = document.getElementById('open-login');
+const copyCodeButton = document.getElementById('copy-code');
 
 let launcherState = {
   termsAccepted: false,
@@ -22,11 +30,23 @@ let launcherState = {
     installedVersion: '',
     lastKnownVersion: ''
   },
+  account: {
+    username: '',
+    loggedIn: false
+  },
   update: {
     hasUpdateSource: false,
     preferredVersion: null
   }
 };
+
+let activeDeviceLogin = null;
+let pollTimer = null;
+
+function setAccountStatus(message, isError = false) {
+  accountStatus.textContent = message || '';
+  accountStatus.classList.toggle('error', Boolean(isError));
+}
 
 function setDropdown(open) {
   dropdown.classList.toggle('open', open);
@@ -36,10 +56,11 @@ function setDropdown(open) {
 }
 
 function updateStartButtonState() {
-  const { termsAccepted, installation } = launcherState;
+  const { termsAccepted, installation, account } = launcherState;
   const buttonLabel = installation.isInstalled ? 'PLAY' : 'INSTALL';
   startButton.querySelector('.label').textContent = buttonLabel;
-  startButton.disabled = !termsAccepted;
+  const requiresLogin = installation.isInstalled;
+  startButton.disabled = !termsAccepted || (requiresLogin && !account.loggedIn);
   startButton.classList.toggle('needs-install', !installation.isInstalled);
 }
 
@@ -103,10 +124,73 @@ function handleProgress(payload) {
   }
 }
 
+function hideDeviceLogin() {
+  activeDeviceLogin = null;
+  deviceLoginPanel.hidden = true;
+  deviceMessage.textContent = '';
+  userCodeEl.textContent = '';
+}
+
+function startPollingForLogin(intervalOverride) {
+  if (!activeDeviceLogin) return;
+  const currentInterval = intervalOverride || Math.max(5000, (activeDeviceLogin.interval || 5) * 1000);
+
+  if (pollTimer) clearInterval(pollTimer);
+
+  pollTimer = setInterval(async () => {
+    try {
+      const result = await window.hellas.pollDeviceLogin({ deviceCode: activeDeviceLogin.deviceCode });
+      if (result.status === 'pending') {
+        deviceMessage.textContent = 'Waiting for approval…';
+        return;
+      }
+      if (result.status === 'slow_down') {
+        clearInterval(pollTimer);
+        pollTimer = null;
+        setTimeout(() => startPollingForLogin(currentInterval + 2000), currentInterval);
+        deviceMessage.textContent = 'Please finish signing in…';
+        return;
+      }
+      if (result.status === 'expired' || result.status === 'declined') {
+        setAccountStatus(result.message || 'Authorization was declined or expired.', true);
+        hideDeviceLogin();
+        clearInterval(pollTimer);
+        pollTimer = null;
+        return;
+      }
+      if (result.status === 'error') {
+        setAccountStatus(result.message || 'Login failed.', true);
+        hideDeviceLogin();
+        clearInterval(pollTimer);
+        pollTimer = null;
+        return;
+      }
+      if (result.status === 'success') {
+        hideDeviceLogin();
+        launcherState.account = result.account;
+        setAccountStatus(`Logged in as ${result.account.username}`);
+        updateStartButtonState();
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    } catch (error) {
+      console.error(error);
+      setAccountStatus(error.message || 'Login failed.', true);
+      clearInterval(pollTimer);
+      pollTimer = null;
+    }
+  }, currentInterval);
+}
+
 async function refreshState() {
   const state = await window.hellas.getState();
   launcherState = state;
   termsCheckbox.checked = state.termsAccepted;
+  if (state.account?.loggedIn) {
+    setAccountStatus(`Logged in as ${state.account.username}`);
+  } else {
+    setAccountStatus('Not logged in', true);
+  }
   updateStartButtonState();
   updateInstallLabels();
   applyAnimationState();
@@ -150,11 +234,58 @@ logoButton.addEventListener('click', () => {
   window.hellas.openExternal(launcherState.websiteUrl || 'https://hellasregion.com');
 });
 
+closeButton.addEventListener('click', () => {
+  window.hellas.close();
+});
+
 termsCheckbox.addEventListener('change', async (event) => {
   const checked = event.target.checked;
   launcherState.termsAccepted = await window.hellas.setTermsAccepted(checked);
   updateStartButtonState();
 });
+
+loginButton.addEventListener('click', async () => {
+  hideDeviceLogin();
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = null;
+  }
+
+  setAccountStatus('Starting Microsoft sign-in…');
+  try {
+    const deviceInfo = await window.hellas.beginDeviceLogin();
+    activeDeviceLogin = deviceInfo;
+    userCodeEl.textContent = deviceInfo.userCode;
+    deviceMessage.textContent = deviceInfo.message || 'Use this code to sign in.';
+    deviceLoginPanel.hidden = false;
+    window.hellas.openExternal(deviceInfo.verificationUri);
+    startPollingForLogin();
+  } catch (error) {
+    console.error(error);
+    setAccountStatus(error.message || 'Failed to start sign-in.', true);
+    hideDeviceLogin();
+  }
+});
+
+if (openLoginButton) {
+  openLoginButton.addEventListener('click', () => {
+    if (activeDeviceLogin?.verificationUri) {
+      window.hellas.openExternal(activeDeviceLogin.verificationUri);
+    }
+  });
+}
+
+if (copyCodeButton) {
+  copyCodeButton.addEventListener('click', async () => {
+    if (!activeDeviceLogin?.userCode) return;
+    try {
+      await navigator.clipboard.writeText(activeDeviceLogin.userCode);
+      deviceMessage.textContent = 'Code copied. Complete sign-in in your browser.';
+    } catch (error) {
+      deviceMessage.textContent = 'Copy failed. Enter the code manually.';
+    }
+  });
+}
 
 startButton.addEventListener('click', async () => {
   if (!launcherState.termsAccepted) {
@@ -170,8 +301,22 @@ startButton.addEventListener('click', async () => {
     startButton.disabled = false;
     updateInstallLabels();
   } else {
-    startButton.querySelector('.label').textContent = 'PLAY';
-    // Placeholder for future Minecraft launch integration.
+    if (!launcherState.account.loggedIn) {
+      setAccountStatus('Please log in before launching.', true);
+      return;
+    }
+
+    startButton.querySelector('.label').textContent = 'LAUNCHING…';
+    try {
+      await window.hellas.launchGame();
+      setAccountStatus('Modpack launch triggered.');
+    } catch (error) {
+      console.error(error);
+      setAccountStatus(error.message || 'Failed to launch the modpack.', true);
+    } finally {
+      startButton.querySelector('.label').textContent = 'PLAY';
+      updateStartButtonState();
+    }
   }
 });
 
@@ -217,6 +362,10 @@ dropdownActions.forEach((button) => {
         break;
       case 'logout':
         await window.hellas.logout();
+        launcherState.account = { username: '', loggedIn: false };
+        hideDeviceLogin();
+        setAccountStatus('Logged out', true);
+        updateStartButtonState();
         break;
       default:
         break;
@@ -225,6 +374,16 @@ dropdownActions.forEach((button) => {
 });
 
 window.hellas.onUpdateProgress(handleProgress);
+
+window.hellas.onAccountUpdated((account) => {
+  launcherState.account = account || { username: '', loggedIn: false };
+  if (account?.loggedIn) {
+    setAccountStatus(`Logged in as ${account.username}`);
+  } else {
+    setAccountStatus('Not logged in', true);
+  }
+  updateStartButtonState();
+});
 
 window.addEventListener('DOMContentLoaded', async () => {
   await refreshState();

@@ -6,11 +6,13 @@ const semver = require('semver');
 require('dotenv').config();
 
 const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest } = require('./update');
-const { logout } = require('./auth');
+const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
+const { launchModpack } = require('./launcher');
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 let mainWindow;
 let store;
+let sessionAccount = { username: '', accessToken: '', refreshToken: '', uuid: '' };
 
 function createStore() {
   const defaults = {
@@ -18,14 +20,85 @@ function createStore() {
     animationEnabled: process.env.AETHERVEIL_ANIM_ENABLED !== 'false',
     installDir: path.join(app.getPath('appData'), 'Hellas'),
     installedVersion: '',
-    lastKnownVersion: ''
+    lastKnownVersion: '',
+    account: {
+      username: '',
+      refreshToken: ''
+    }
   };
 
   store = new Store({ defaults });
+
+  const storedAccount = store.get('account');
+  if (storedAccount && storedAccount.accessToken) {
+    store.set('account', { username: storedAccount.username || '', refreshToken: '' });
+  }
 }
 
 function getInstallDir() {
   return store.get('installDir');
+}
+
+function getAccount() {
+  const storedAccount = store.get('account') || { username: '' };
+  const resolved = {
+    username: sessionAccount.username || storedAccount.username || '',
+    loggedIn: Boolean(sessionAccount.username && sessionAccount.accessToken)
+  };
+
+  return resolved;
+}
+
+function getSessionAccount() {
+  return { ...sessionAccount };
+}
+
+function broadcastAccount() {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.webContents.send('hellas:account-updated', getAccount());
+  }
+}
+
+function clearSessionAccount() {
+  sessionAccount = { username: '', accessToken: '', refreshToken: '', uuid: '' };
+}
+
+async function setSession(session) {
+  if (!session || !session.username || !session.accessToken) {
+    clearSessionAccount();
+    store.set('account', { username: '', refreshToken: '' });
+    broadcastAccount();
+    return;
+  }
+
+  sessionAccount = {
+    username: session.username,
+    uuid: session.uuid || '',
+    accessToken: session.accessToken,
+    refreshToken: session.refreshToken || ''
+  };
+  store.set('account', {
+    username: session.username,
+    refreshToken: session.refreshToken || ''
+  });
+  broadcastAccount();
+}
+
+async function attemptRestoreAccount() {
+  const storedAccount = store.get('account');
+  if (!storedAccount || !storedAccount.refreshToken) {
+    clearSessionAccount();
+    return;
+  }
+
+  try {
+    const session = await loginWithRefreshToken(storedAccount.refreshToken);
+    await setSession(session);
+  } catch (error) {
+    console.warn('Stored login could not be refreshed', error);
+    clearSessionAccount();
+    store.set('account', { username: '', refreshToken: '' });
+  }
 }
 
 function getInstallationState() {
@@ -70,8 +143,9 @@ function createWindow() {
   }
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   createStore();
+  await attemptRestoreAccount();
   createWindow();
 
   app.on('activate', () => {
@@ -127,6 +201,7 @@ ipcMain.handle('hellas:get-state', async () => {
     websiteUrl: process.env.WEBSITE_URL || 'https://hellasregion.com',
     dynmapUrl: process.env.DYNMAP_URL || 'https://map.hellasregion.com',
     installation,
+    account: getAccount(),
     termsAccepted: store.get('termsAccepted'),
     animationEnabled: store.get('animationEnabled'),
     update: {
@@ -147,6 +222,23 @@ ipcMain.handle('hellas:set-animation', async (_event, value) => {
   return store.get('animationEnabled');
 });
 
+ipcMain.handle('hellas:start-device-login', async () => requestDeviceCode());
+
+ipcMain.handle('hellas:poll-device-login', async (_event, payload) => {
+  const deviceCode = payload?.deviceCode;
+  if (!deviceCode) {
+    throw new Error('Device code missing.');
+  }
+
+  const result = await pollDeviceCode(deviceCode);
+  if (result.status === 'success') {
+    await setSession(result.session);
+    return { status: 'success', account: getAccount() };
+  }
+
+  return result;
+});
+
 ipcMain.handle('hellas:perform-install', async () => {
   const dir = getInstallDir();
   await fs.promises.mkdir(dir, { recursive: true });
@@ -161,9 +253,30 @@ ipcMain.handle('hellas:open-external', async (_event, targetUrl) => {
   }
 });
 
+ipcMain.handle('hellas:close', async () => {
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.close();
+  } else {
+    app.quit();
+  }
+});
+
 ipcMain.handle('hellas:logout', async () => {
-  await logout();
+  clearSessionAccount();
+  store.set('account', { username: '', refreshToken: '' });
+  broadcastAccount();
   return true;
+});
+
+ipcMain.handle('hellas:launch-game', async () => {
+  const account = getSessionAccount();
+  if (!account.username || !account.accessToken) {
+    throw new Error('Please log in with your Minecraft account before launching.');
+  }
+
+  const installDir = getInstallDir();
+  const { launchedWith } = await launchModpack({ installDir, account });
+  return { account: { username: account.username }, installDir, launchedWith };
 });
 
 ipcMain.handle('hellas:trigger-update', async () => {
