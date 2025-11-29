@@ -1,21 +1,24 @@
 const fetch = require('node-fetch');
 const path = require('path');
-const { promises: fs } = require('fs');
+const fs = require('fs');
+const fsp = fs.promises;
 const { Client } = require('minecraft-launcher-core');
 
 const DEFAULT_MC_VERSION = '1.16.5';
+const MOJANG_MANIFEST_URL = 'https://launchermeta.mojang.com/mc/game/version_manifest.json';
 const FORGE_METADATA_URL = 'https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml';
+const FORGE_BASE_URL = 'https://maven.minecraftforge.net/net/minecraftforge/forge';
 const launcher = new Client();
 
 let cachedForgeVersion = null;
 let activeLaunch = null;
 
 async function ensureInstallDirExists(installDir) {
-  await fs.mkdir(installDir, { recursive: true });
+  await fsp.mkdir(installDir, { recursive: true });
 }
 
 async function findGameDirectory(installDir) {
-  const entries = await fs.readdir(installDir, { withFileTypes: true });
+  const entries = await fsp.readdir(installDir, { withFileTypes: true });
   const hasModsAtRoot = entries.some(
     (entry) => entry.isDirectory() && entry.name.toLowerCase() === 'mods'
   );
@@ -27,7 +30,7 @@ async function findGameDirectory(installDir) {
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
     const potentialDir = path.join(installDir, entry.name);
-    const subEntries = await fs.readdir(potentialDir, { withFileTypes: true }).catch(() => []);
+    const subEntries = await fsp.readdir(potentialDir, { withFileTypes: true }).catch(() => []);
     const hasMods = subEntries.some(
       (subEntry) => subEntry.isDirectory() && subEntry.name.toLowerCase() === 'mods'
     );
@@ -179,7 +182,7 @@ async function launchModpack({ installDir, account, onStatus = () => {} }) {
       number: DEFAULT_MC_VERSION,
       type: 'release'
     },
-    forge: forgeVersion,
+    forge: forgeInstallerPath,
     memory: {
       max: process.env.MC_MEMORY_MAX || '4096',
       min: process.env.MC_MEMORY_MIN || '2048'
