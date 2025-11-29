@@ -360,6 +360,27 @@ dropdownActions.forEach((button) => {
         await window.hellas.setAnimationEnabled(launcherState.animationEnabled);
         applyAnimationState();
         break;
+      case 'reinstall':
+        setUpdating(true);
+        updateProgressText.textContent = 'Reinstalling…';
+        try {
+          const result = await window.hellas.freshReinstall();
+          if (result && result.installation) {
+            launcherState.installation = result.installation;
+          }
+          if (result && result.version) {
+            launcherState.update.preferredVersion = result.version;
+            await window.hellas.updateKnownVersion(result.version);
+          }
+          launcherState.update.available = false;
+          updateInstallLabels();
+          updateStartButtonState();
+        } catch (error) {
+          console.error(error);
+          updateProgressText.textContent = 'Reinstall failed';
+          setTimeout(() => setUpdating(false), 2500);
+        }
+        break;
       case 'logout':
         await window.hellas.logout();
         launcherState.account = { username: '', loggedIn: false };

@@ -5,7 +5,7 @@ const crypto = require('crypto');
 const fetch = require('node-fetch');
 const AdmZip = require('adm-zip');
 
-const DEFAULT_PACK_URL = 'https://hellasregion.com/download/latest';
+const DEFAULT_PACK_URL = 'https://hellasregion.com/download/launcher/latest/compact';
 const PROGRESS_PHASE_DOWNLOAD = 80; // percent allocated to download progress
 
 function resolveUpdateSource() {
@@ -140,8 +140,20 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
   return { version: resolved.version || null };
 }
 
+async function freshReinstall(targetDir, progressCallback = () => {}) {
+  const updateSource = resolveUpdateSource();
+  if (!updateSource || !updateSource.url) {
+    throw new Error('Update source is not configured.');
+  }
+
+  await fs.promises.rm(targetDir, { recursive: true, force: true });
+
+  return downloadAndExtractUpdate(updateSource, targetDir, progressCallback);
+}
+
 module.exports = {
   resolveUpdateSource,
   downloadAndExtractUpdate,
-  fetchFeedManifest
+  fetchFeedManifest,
+  freshReinstall
 };
