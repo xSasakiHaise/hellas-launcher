@@ -1,18 +1,25 @@
 const path = require('path');
 const fs = require('fs');
-const { app, BrowserWindow, ipcMain, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const Store = require('electron-store');
 const semver = require('semver');
 require('dotenv').config();
 
 const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall } = require('./update');
 const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
-const { launchModpack } = require('./launcher');
+const { launchModpack, cancelLaunch, isLaunching } = require('./launcher');
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 let mainWindow;
 let store;
 let sessionAccount = { username: '', accessToken: '', refreshToken: '', uuid: '' };
+let updateAbortController = null;
+let updateInProgress = false;
+let launchInProgress = false;
+
+function setUpdateInProgress(value) {
+  updateInProgress = value;
+}
 
 function createStore() {
   const defaults = {
@@ -118,6 +125,39 @@ function sendUpdateProgress(payload) {
   }
 }
 
+function cancelActiveUpdate() {
+  if (updateAbortController) {
+    updateAbortController.abort();
+    return true;
+  }
+
+  return false;
+}
+
+async function runUpdateTask(task) {
+  if (updateInProgress) {
+    throw new Error('Another download is already in progress.');
+  }
+
+  updateAbortController = new AbortController();
+  setUpdateInProgress(true);
+
+  try {
+    const result = await task(updateAbortController.signal);
+    return result;
+  } catch (error) {
+    if (error.cancelled || error.name === 'AbortError') {
+      return { cancelled: true };
+    }
+    throw error;
+  } finally {
+    if (updateAbortController) {
+      updateAbortController = null;
+    }
+    setUpdateInProgress(false);
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -139,6 +179,26 @@ function createWindow() {
 
   mainWindow.setMenuBarVisibility(false);
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+
+  mainWindow.on('close', (event) => {
+    if (updateInProgress) {
+      const choice = dialog.showMessageBoxSync(mainWindow, {
+        type: 'question',
+        buttons: ['Yes', 'No'],
+        defaultId: 1,
+        cancelId: 1,
+        title: 'Download in progress',
+        message: 'A download is currently in progress. Closing will cancel it. Are you sure you want to exit?'
+      });
+
+      if (choice === 1) {
+        event.preventDefault();
+        return;
+      }
+
+      cancelActiveUpdate();
+    }
+  });
 
   if (isDevelopment) {
     mainWindow.webContents.openDevTools({ mode: 'detach' });
@@ -251,7 +311,13 @@ ipcMain.handle('hellas:perform-install', async () => {
   await fs.promises.mkdir(dir, { recursive: true });
 
   sendUpdateProgress({ state: 'downloading', progress: 0 });
-  const result = await downloadAndExtractUpdate(updateSource, dir, sendUpdateProgress);
+  const result = await runUpdateTask((signal) =>
+    downloadAndExtractUpdate(updateSource, dir, sendUpdateProgress, signal)
+  );
+  if (result.cancelled) {
+    return { cancelled: true };
+  }
+
   if (result.version) {
     store.set('installedVersion', result.version);
     store.set('lastKnownVersion', result.version);
@@ -289,6 +355,8 @@ ipcMain.handle('hellas:close', async () => {
   }
 });
 
+ipcMain.handle('hellas:cancel-update', async () => cancelActiveUpdate());
+
 ipcMain.handle('hellas:logout', async () => {
   clearSessionAccount();
   store.set('account', { username: '', refreshToken: '' });
@@ -303,8 +371,22 @@ ipcMain.handle('hellas:launch-game', async () => {
   }
 
   const installDir = getInstallDir();
-  const { launchedWith } = await launchModpack({ installDir, account });
-  return { account: { username: account.username }, installDir, launchedWith };
+  if (launchInProgress || isLaunching()) {
+    throw new Error('A launch is already running.');
+  }
+
+  launchInProgress = true;
+  try {
+    const { launchedWith } = await launchModpack({ installDir, account });
+    return { account: { username: account.username }, installDir, launchedWith };
+  } finally {
+    launchInProgress = false;
+  }
+});
+
+ipcMain.handle('hellas:cancel-launch', async () => {
+  launchInProgress = false;
+  return cancelLaunch();
 });
 
 ipcMain.handle('hellas:trigger-update', async () => {
@@ -315,7 +397,13 @@ ipcMain.handle('hellas:trigger-update', async () => {
 
   sendUpdateProgress({ state: 'downloading', progress: 0 });
   const installDir = getInstallDir();
-  const result = await downloadAndExtractUpdate(updateSource, installDir, sendUpdateProgress);
+  const result = await runUpdateTask((signal) =>
+    downloadAndExtractUpdate(updateSource, installDir, sendUpdateProgress, signal)
+  );
+  if (result.cancelled) {
+    return { cancelled: true };
+  }
+
   if (result.version) {
     store.set('installedVersion', result.version);
     store.set('lastKnownVersion', result.version);
@@ -332,7 +420,11 @@ ipcMain.handle('hellas:fresh-reinstall', async () => {
 
   sendUpdateProgress({ state: 'downloading', progress: 0 });
   const installDir = getInstallDir();
-  const result = await freshReinstall(installDir, sendUpdateProgress);
+  const result = await runUpdateTask((signal) => freshReinstall(installDir, sendUpdateProgress, signal));
+  if (result.cancelled) {
+    return { cancelled: true };
+  }
+
   if (result.version) {
     store.set('installedVersion', result.version);
     store.set('lastKnownVersion', result.version);

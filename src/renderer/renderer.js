@@ -17,6 +17,7 @@ const versionLabel = document.getElementById('version-label');
 const updateProgress = document.getElementById('update-progress');
 const updateProgressBar = document.getElementById('update-progress-bar');
 const updateProgressText = document.getElementById('update-progress-text');
+const cancelUpdateButton = document.getElementById('cancel-update-button');
 const loginButton = document.getElementById('login-button');
 const accountStatus = document.getElementById('account-status');
 const accountPanel = document.getElementById('account-panel');
@@ -26,6 +27,7 @@ const deviceMessage = document.getElementById('device-message');
 const openLoginButton = document.getElementById('open-login');
 const copyCodeButton = document.getElementById('copy-code');
 const closeAccountModal = document.getElementById('close-account-modal');
+const cancelLaunchButton = document.getElementById('cancel-launch-button');
 
 let launcherState = {
   termsAccepted: false,
@@ -49,6 +51,8 @@ let launcherState = {
 let activeDeviceLogin = null;
 let pollTimer = null;
 let accountPanelOpen = false;
+let updateInProgress = false;
+let launchInProgress = false;
 
 function setAccountStatus(message, isError = false) {
   accountStatus.textContent = message || '';
@@ -65,7 +69,7 @@ function updateStartButtonState() {
   const { termsAccepted, installation } = launcherState;
   const buttonLabel = installation.isInstalled ? 'PLAY' : 'INSTALL';
   startButton.querySelector('.label').textContent = buttonLabel;
-  startButton.disabled = !termsAccepted;
+  startButton.disabled = !termsAccepted || updateInProgress || launchInProgress;
   startButton.classList.toggle('needs-install', !installation.isInstalled);
 }
 
@@ -96,8 +100,10 @@ function applyAnimationState() {
   }
 }
 
-function setUpdating(isUpdating) {
-  startButton.disabled = isUpdating || !launcherState.termsAccepted;
+function setUpdating(isUpdating, options = {}) {
+  const { resetText = true } = options;
+  updateInProgress = isUpdating;
+  startButton.disabled = isUpdating || !launcherState.termsAccepted || launchInProgress;
   updateButton.disabled = isUpdating;
   updateProgress.hidden = !isUpdating;
   updateProgress.classList.remove('error');
@@ -107,9 +113,13 @@ function setUpdating(isUpdating) {
   } else if (updateLabel) {
     updateLabel.textContent = launcherState.update.hasUpdateSource ? 'Update' : 'No Update Source';
   }
-  if (!isUpdating) {
+  if (!isUpdating && resetText) {
     updateProgressBar.style.width = '0%';
     updateProgressText.textContent = '';
+  }
+  if (cancelUpdateButton) {
+    cancelUpdateButton.hidden = !isUpdating;
+    cancelUpdateButton.disabled = !isUpdating;
   }
 }
 
@@ -121,7 +131,16 @@ function handleProgress(payload) {
     updateProgress.classList.add('error');
     updateProgressBar.style.width = '0%';
     updateProgressText.textContent = payload.message || 'Download failed. Please try again.';
-    setUpdating(false);
+    setUpdating(false, { resetText: false });
+    updateProgress.hidden = false;
+    return;
+  }
+
+  if (payload.state === 'cancelled') {
+    updateProgress.classList.remove('error');
+    updateProgressBar.style.width = '0%';
+    updateProgressText.textContent = payload.message || 'Update cancelled.';
+    setUpdating(false, { resetText: false });
     updateProgress.hidden = false;
     return;
   }
@@ -348,7 +367,19 @@ logoButton.addEventListener('click', () => {
   window.hellas.openExternal(launcherState.websiteUrl || 'https://hellasregion.com');
 });
 
-closeButton.addEventListener('click', () => {
+closeButton.addEventListener('click', async () => {
+  if (updateInProgress) {
+    const shouldClose = window.confirm(
+      'A download is in progress. Closing will cancel it. Are you sure you want to exit?'
+    );
+
+    if (!shouldClose) {
+      return;
+    }
+
+    await window.hellas.cancelUpdate();
+  }
+
   window.hellas.close();
 });
 
@@ -409,8 +440,15 @@ startButton.addEventListener('click', async () => {
     startButton.querySelector('.label').textContent = 'INSTALLING…';
     setUpdating(true);
     updateProgressText.textContent = 'Preparing…';
+    let preserveProgress = false;
     try {
       const result = await window.hellas.performInstall();
+      if (result?.cancelled) {
+        updateProgressText.textContent = 'Install cancelled.';
+        updateProgress.hidden = false;
+        preserveProgress = true;
+        return;
+      }
       if (result && result.installation) {
         launcherState.installation = result.installation;
       }
@@ -423,14 +461,25 @@ startButton.addEventListener('click', async () => {
       updateStartButtonState();
     } catch (error) {
       console.error(error);
-      updateProgress.classList.add('error');
-      updateProgressText.textContent = error.message || 'Install failed.';
-      setAccountStatus(error.message || 'Install failed.', true);
-      setUpdating(false);
+      if (error?.cancelled || error?.message === 'Update cancelled') {
+        updateProgressText.textContent = 'Install cancelled.';
+        updateProgress.classList.remove('error');
+        preserveProgress = true;
+      } else {
+        updateProgress.classList.add('error');
+        updateProgressText.textContent = error.message || 'Install failed.';
+        setAccountStatus(error.message || 'Install failed.', true);
+        preserveProgress = true;
+      }
       updateProgress.hidden = false;
     } finally {
+      setUpdating(false, { resetText: !preserveProgress });
       startButton.querySelector('.label').textContent = 'PLAY';
       startButton.disabled = false;
+      updateStartButtonState();
+      if (preserveProgress) {
+        updateProgress.hidden = false;
+      }
     }
   } else {
     if (!launcherState.account.loggedIn) {
@@ -439,6 +488,11 @@ startButton.addEventListener('click', async () => {
       return;
     }
 
+    launchInProgress = true;
+    if (cancelLaunchButton) {
+      cancelLaunchButton.hidden = false;
+      cancelLaunchButton.disabled = false;
+    }
     startButton.querySelector('.label').textContent = 'LAUNCHING…';
     try {
       await window.hellas.launchGame();
@@ -447,6 +501,10 @@ startButton.addEventListener('click', async () => {
       console.error(error);
       setAccountStatus(error.message || 'Failed to launch the modpack.', true);
     } finally {
+      launchInProgress = false;
+      if (cancelLaunchButton) {
+        cancelLaunchButton.hidden = true;
+      }
       startButton.querySelector('.label').textContent = 'PLAY';
       updateStartButtonState();
     }
@@ -460,8 +518,16 @@ updateButton.addEventListener('click', async () => {
 
   setUpdating(true);
   updateProgressText.textContent = 'Preparing…';
+  let preserveProgress = false;
   try {
     const result = await window.hellas.triggerUpdate();
+    if (result?.cancelled) {
+      updateProgressText.textContent = 'Update cancelled.';
+      setUpdating(false, { resetText: false });
+      updateProgress.hidden = false;
+      preserveProgress = true;
+      return;
+    }
     if (result && result.installation) {
       launcherState.installation = result.installation;
       if (result.version) {
@@ -472,16 +538,50 @@ updateButton.addEventListener('click', async () => {
       updateInstallLabels();
       updateStartButtonState();
     }
+    setUpdating(false);
   } catch (error) {
     console.error(error);
-    updateProgress.classList.add('error');
-    updateProgressText.textContent = error.message || 'Update failed';
-    setTimeout(() => {
-      setUpdating(false);
+    if (error?.cancelled || error?.message === 'Update cancelled') {
+      updateProgress.classList.remove('error');
+      updateProgressText.textContent = 'Update cancelled.';
+      setUpdating(false, { resetText: false });
       updateProgress.hidden = false;
-    }, 2500);
+      preserveProgress = true;
+    } else {
+      updateProgress.classList.add('error');
+      updateProgressText.textContent = error.message || 'Update failed';
+      setTimeout(() => {
+        setUpdating(false, { resetText: false });
+        updateProgress.hidden = false;
+      }, 2500);
+    }
+  } finally {
+    if (preserveProgress) {
+      updateProgress.hidden = false;
+    }
   }
 });
+
+if (cancelUpdateButton) {
+  cancelUpdateButton.addEventListener('click', async () => {
+    cancelUpdateButton.disabled = true;
+    updateProgress.hidden = false;
+    updateProgressText.textContent = 'Cancelling…';
+    await window.hellas.cancelUpdate();
+  });
+}
+
+if (cancelLaunchButton) {
+  cancelLaunchButton.addEventListener('click', async () => {
+    cancelLaunchButton.disabled = true;
+    await window.hellas.cancelLaunch();
+    launchInProgress = false;
+    startButton.querySelector('.label').textContent = 'PLAY';
+    setAccountStatus('Launch cancelled.', true);
+    updateStartButtonState();
+    cancelLaunchButton.hidden = true;
+  });
+}
 
 const dropdownActions = dropdown.querySelectorAll('button[data-action]');
 dropdownActions.forEach((button) => {
@@ -500,8 +600,16 @@ dropdownActions.forEach((button) => {
       case 'reinstall':
         setUpdating(true);
         updateProgressText.textContent = 'Reinstalling…';
+        let preserveProgress = false;
         try {
           const result = await window.hellas.freshReinstall();
+          if (result?.cancelled) {
+            updateProgressText.textContent = 'Reinstall cancelled.';
+            updateProgress.hidden = false;
+            setUpdating(false, { resetText: false });
+            preserveProgress = true;
+            return;
+          }
           if (result && result.installation) {
             launcherState.installation = result.installation;
           }
@@ -512,14 +620,27 @@ dropdownActions.forEach((button) => {
           launcherState.update.available = false;
           updateInstallLabels();
           updateStartButtonState();
+          setUpdating(false);
         } catch (error) {
           console.error(error);
-          updateProgress.classList.add('error');
-          updateProgressText.textContent = error.message || 'Reinstall failed';
-          setTimeout(() => {
-            setUpdating(false);
+          if (error?.cancelled || error?.message === 'Update cancelled') {
+            updateProgress.classList.remove('error');
+            updateProgressText.textContent = 'Reinstall cancelled.';
+            setUpdating(false, { resetText: false });
             updateProgress.hidden = false;
-          }, 2500);
+            preserveProgress = true;
+          } else {
+            updateProgress.classList.add('error');
+            updateProgressText.textContent = error.message || 'Reinstall failed';
+            setTimeout(() => {
+              setUpdating(false, { resetText: false });
+              updateProgress.hidden = false;
+            }, 2500);
+          }
+        } finally {
+          if (preserveProgress) {
+            updateProgress.hidden = false;
+          }
         }
         break;
       case 'logout':
