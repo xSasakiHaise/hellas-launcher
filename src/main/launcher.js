@@ -71,7 +71,7 @@ async function fetchLatestForgeVersion() {
   return latest;
 }
 
-async function checkLaunchRequirements(installDir) {
+async function checkLaunchRequirements(installDir, expectedModpackVersion = null) {
   const minecraftVersion = DEFAULT_MC_VERSION;
   const forgeVersion = await fetchLatestForgeVersion();
 
@@ -100,15 +100,32 @@ async function checkLaunchRequirements(installDir) {
         .catch(() => false)
     : false;
 
-  const modpackPresent = await fs
-    .readdir(modsPath)
-    .then((entries) => entries.length > 0)
-    .catch(() => false);
+  const expectedModpackJar = expectedModpackVersion
+    ? `hellasforms-${expectedModpackVersion}.jar`
+    : null;
 
-  const legacyModpackPresent = await fs
-    .readdir(fallbackModsPath)
-    .then((entries) => entries.length > 0)
-    .catch(() => false);
+  const modpackJarPresent = expectedModpackJar
+    ? await fs
+        .access(path.join(modsPath, expectedModpackJar))
+        .then(() => true)
+        .catch(async () =>
+          fs.access(path.join(fallbackModsPath, expectedModpackJar)).then(() => true).catch(() => false)
+        )
+    : false;
+
+  const modpackPresent =
+    modpackJarPresent ||
+    (await fs
+      .readdir(modsPath)
+      .then((entries) => entries.length > 0)
+      .catch(() => false));
+
+  const legacyModpackPresent =
+    modpackJarPresent ||
+    (await fs
+      .readdir(fallbackModsPath)
+      .then((entries) => entries.length > 0)
+      .catch(() => false));
 
   return {
     minecraftVersion,
@@ -121,7 +138,12 @@ async function checkLaunchRequirements(installDir) {
   };
 }
 
-async function launchModpack({ installDir, account, onStatus = () => {} }) {
+async function launchModpack({
+  installDir,
+  account,
+  onStatus = () => {},
+  expectedModpackVersion = null
+}) {
   if (!installDir) {
     throw new Error('Install directory is missing. Please install the modpack first.');
   }
@@ -132,7 +154,10 @@ async function launchModpack({ installDir, account, onStatus = () => {} }) {
 
   await ensureInstallDirExists(installDir);
   onStatus({ message: `Checking installation in ${installDir}` });
-  const { requirements, forgeVersion } = await checkLaunchRequirements(installDir);
+  const { requirements, forgeVersion } = await checkLaunchRequirements(
+    installDir,
+    expectedModpackVersion
+  );
   const missing = Object.entries(requirements)
     .filter(([, present]) => !present)
     .map(([key]) => key);
