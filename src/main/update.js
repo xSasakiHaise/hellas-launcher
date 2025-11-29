@@ -10,6 +10,7 @@ const PROGRESS_PHASE_DOWNLOAD = 80; // percent allocated to download progress
 const MODPACK_DIR_NAME = 'modpack';
 const MODS_DIR_NAME = 'mods';
 const RESOURCEPACKS_DIR_NAME = 'resourcepacks';
+const SERVER_FILES = ['servers.dat', 'servers.dat_old'];
 
 function resolveUpdateSource() {
   const feedUrl = (process.env.PACK_FEED_URL || '').trim();
@@ -115,6 +116,30 @@ async function moveDirectoryContents(sourceDir, destinationDir) {
   return true;
 }
 
+async function moveFileIfExists(sourcePath, destinationPath) {
+  const exists = await fs.promises
+    .access(sourcePath)
+    .then(() => true)
+    .catch(() => false);
+
+  if (!exists) return false;
+
+  await fs.promises.mkdir(path.dirname(destinationPath), { recursive: true });
+
+  try {
+    await fs.promises.rename(sourcePath, destinationPath);
+  } catch (error) {
+    if (error.code === 'EXDEV') {
+      await fs.promises.copyFile(sourcePath, destinationPath);
+      await fs.promises.unlink(sourcePath);
+    } else {
+      throw error;
+    }
+  }
+
+  return true;
+}
+
 async function downloadAndExtractUpdate(source, targetDir, progressCallback = () => {}, abortSignal) {
   let resolved = { ...source };
   let tempZipPath = null;
@@ -217,7 +242,7 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
 
     ensureNotCancelled(abortSignal);
     await fs.promises.mkdir(targetDir, { recursive: true });
-    const { modsDir, resourcepacksDir } = await ensureModpackStructure(targetDir);
+    const { modpackDir, modsDir, resourcepacksDir } = await ensureModpackStructure(targetDir);
     // Preserve other directories by extracting over the install dir, but ensure mods
     // are fully replaced to avoid stale content lingering between updates.
     const legacyModsDir = path.join(targetDir, MODS_DIR_NAME);
@@ -243,6 +268,9 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
     await ensureModpackStructure(targetDir);
     await moveDirectoryContents(legacyModsDir, modsDir);
     await moveDirectoryContents(legacyResourcepacksDir, resourcepacksDir);
+    for (const serverFile of SERVER_FILES) {
+      await moveFileIfExists(path.join(targetDir, serverFile), path.join(modpackDir, serverFile));
+    }
 
     progressCallback({ state: 'finalizing', progress: 95 });
   } catch (error) {
