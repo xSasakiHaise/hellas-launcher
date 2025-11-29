@@ -114,6 +114,7 @@ async function getInstallationState() {
   let requirements = { minecraft: false, forge: false, modpack: false };
   let forgeVersion = null;
   let minecraftVersion = null;
+  let detectedModpackVersion = null;
   const expectedModpackVersion = store.get('lastKnownVersion') || store.get('installedVersion') || null;
 
   try {
@@ -121,6 +122,7 @@ async function getInstallationState() {
     requirements = check.requirements;
     forgeVersion = check.forgeVersion;
     minecraftVersion = check.minecraftVersion;
+    detectedModpackVersion = check.modpackVersion || null;
   } catch (error) {
     console.warn('Unable to verify installation readiness', error);
   }
@@ -128,7 +130,14 @@ async function getInstallationState() {
   const installedVersion = store.get('installedVersion') || '';
   const lastKnownVersion = store.get('lastKnownVersion') || '';
   const resolvedInstalledVersion =
-    installedVersion || (requirements.modpack ? expectedModpackVersion : '') || lastKnownVersion;
+    installedVersion ||
+    detectedModpackVersion ||
+    (requirements.modpack ? expectedModpackVersion : '') ||
+    lastKnownVersion;
+
+  if (detectedModpackVersion && detectedModpackVersion !== installedVersion) {
+    store.set('installedVersion', detectedModpackVersion);
+  }
   // Consider the installation launch-ready once the modpack content is present; the
   // launcher can download missing Minecraft/Forge files on demand during launch.
   const readyToLaunch = installDirExists && Boolean(resolvedInstalledVersion) && Boolean(requirements.modpack);

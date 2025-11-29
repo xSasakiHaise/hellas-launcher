@@ -15,6 +15,12 @@ async function ensureInstallDirExists(installDir) {
   await fsp.mkdir(installDir, { recursive: true });
 }
 
+function getForgeInstallerPath(installDir, forgeVersion) {
+  if (!forgeVersion) return null;
+
+  return path.join(installDir, 'forge', forgeVersion, `forge-${forgeVersion}-installer.jar`);
+}
+
 async function findGameDirectory(installDir) {
   const modpackDir = path.join(installDir, 'modpack');
   const modpackExists = await fsp
@@ -71,6 +77,57 @@ async function fetchLatestForgeVersion() {
   return latest;
 }
 
+async function ensureForgeInstaller(installDir, forgeVersion, onStatus) {
+  const installerPath = getForgeInstallerPath(installDir, forgeVersion);
+  if (!installerPath) return null;
+
+  const alreadyPresent = await fsp
+    .stat(installerPath)
+    .then((stats) => stats.isFile())
+    .catch(() => false);
+
+  if (alreadyPresent) return installerPath;
+
+  await fsp.mkdir(path.dirname(installerPath), { recursive: true });
+  const downloadUrl = `https://maven.minecraftforge.net/net/minecraftforge/forge/${forgeVersion}/forge-${forgeVersion}-installer.jar`;
+  onStatus?.({ message: `Downloading Forge ${forgeVersion}...` });
+
+  const response = await fetch(downloadUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to download Forge ${forgeVersion} (${response.status})`);
+  }
+
+  const fileStream = fs.createWriteStream(installerPath);
+  await new Promise((resolve, reject) => {
+    response.body.pipe(fileStream);
+    response.body.on('error', reject);
+    fileStream.on('finish', resolve);
+    fileStream.on('error', reject);
+  });
+
+  return installerPath;
+}
+
+async function detectModpackVersion(modsPaths, expectedModpackJar = null) {
+  let detectedVersion = null;
+
+  for (const modsPath of modsPaths) {
+    const entries = await fsp.readdir(modsPath, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const match = entry.name.match(/^hellasforms-([\w.-]+)\.jar$/i);
+      if (match) {
+        detectedVersion = match[1];
+        if (expectedModpackJar && entry.name === expectedModpackJar) {
+          return { modpackJarPresent: true, detectedVersion };
+        }
+      }
+    }
+  }
+
+  return { modpackJarPresent: Boolean(detectedVersion), detectedVersion };
+}
+
 async function checkLaunchRequirements(installDir, expectedModpackVersion = null) {
   const minecraftVersion = DEFAULT_MC_VERSION;
   const forgeVersion = await fetchLatestForgeVersion();
@@ -84,6 +141,7 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
   const forgePath = forgeVersion
     ? path.join(installDir, 'versions', forgeVersion, `${forgeVersion}.json`)
     : null;
+  const forgeInstallerPath = getForgeInstallerPath(installDir, forgeVersion);
   const modpackDir = path.join(installDir, 'modpack');
   const modsPath = path.join(modpackDir, 'mods');
   const fallbackModsPath = path.join(installDir, 'mods');
@@ -98,38 +156,28 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
         .access(forgePath)
         .then(() => true)
         .catch(() => false)
-    : false;
-
-  const expectedModpackJar = expectedModpackVersion
-    ? `hellasforms-${expectedModpackVersion}.jar`
-    : null;
-
-  const modpackJarPresent = expectedModpackJar
-    ? await fs
-        .access(path.join(modsPath, expectedModpackJar))
+    : await fs
+        .access(forgeInstallerPath)
         .then(() => true)
-        .catch(async () =>
-          fs.access(path.join(fallbackModsPath, expectedModpackJar)).then(() => true).catch(() => false)
-        )
-    : false;
+        .catch(() => false);
 
-  const modpackPresent =
-    modpackJarPresent ||
-    (await fs
-      .readdir(modsPath)
-      .then((entries) => entries.length > 0)
-      .catch(() => false));
+  const expectedModpackJar = expectedModpackVersion ? `hellasforms-${expectedModpackVersion}.jar` : null;
+  const primaryModsEntries = await fsp.readdir(modsPath).catch(() => []);
+  const fallbackModsEntries = await fsp.readdir(fallbackModsPath).catch(() => []);
 
-  const legacyModpackPresent =
-    modpackJarPresent ||
-    (await fs
-      .readdir(fallbackModsPath)
-      .then((entries) => entries.length > 0)
-      .catch(() => false));
+  const { modpackJarPresent, detectedVersion } = await detectModpackVersion(
+    [modsPath, fallbackModsPath],
+    expectedModpackJar
+  );
+
+  const modpackPresent = modpackJarPresent || primaryModsEntries.length > 0;
+  const legacyModpackPresent = modpackJarPresent || fallbackModsEntries.length > 0;
 
   return {
     minecraftVersion,
     forgeVersion,
+    forgeInstallerPath,
+    modpackVersion: detectedVersion,
     requirements: {
       minecraft: minecraftPresent,
       forge: forgePresent,
@@ -154,7 +202,7 @@ async function launchModpack({
 
   await ensureInstallDirExists(installDir);
   onStatus({ message: `Checking installation in ${installDir}` });
-  const { requirements, forgeVersion } = await checkLaunchRequirements(
+  const { requirements, forgeVersion, forgeInstallerPath } = await checkLaunchRequirements(
     installDir,
     expectedModpackVersion
   );
@@ -173,6 +221,11 @@ async function launchModpack({
 
   if (missing.length) {
     onStatus({ message: 'Downloading missing Minecraft and Forge files...' });
+  }
+
+  let resolvedForgeInstaller = forgeInstallerPath;
+  if (!requirements.forge) {
+    resolvedForgeInstaller = await ensureForgeInstaller(installDir, forgeVersion, onStatus);
   }
 
   const gameDirectory = await findGameDirectory(installDir);
@@ -229,7 +282,7 @@ async function launchModpack({
       number: DEFAULT_MC_VERSION,
       type: 'release'
     },
-    forge: forgeVersion,
+    forge: resolvedForgeInstaller,
     memory: {
       max: process.env.MC_MEMORY_MAX || '4096',
       min: process.env.MC_MEMORY_MIN || '2048'
