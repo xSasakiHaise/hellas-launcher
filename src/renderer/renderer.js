@@ -46,6 +46,7 @@ let launcherState = {
 
 let activeDeviceLogin = null;
 let pollTimer = null;
+let accountPanelOpen = false;
 
 function setAccountStatus(message, isError = false) {
   accountStatus.textContent = message || '';
@@ -56,15 +57,13 @@ function setDropdown(open) {
   dropdown.classList.toggle('open', open);
   const expanded = open ? 'true' : 'false';
   menuButton.setAttribute('aria-expanded', expanded);
-  accountButton.setAttribute('aria-expanded', expanded);
 }
 
 function updateStartButtonState() {
-  const { termsAccepted, installation, account } = launcherState;
+  const { termsAccepted, installation } = launcherState;
   const buttonLabel = installation.isInstalled ? 'PLAY' : 'INSTALL';
   startButton.querySelector('.label').textContent = buttonLabel;
-  const requiresLogin = installation.isInstalled;
-  startButton.disabled = !termsAccepted || (requiresLogin && !account.loggedIn);
+  startButton.disabled = !termsAccepted;
   startButton.classList.toggle('needs-install', !installation.isInstalled);
 }
 
@@ -135,6 +134,19 @@ function hideDeviceLogin() {
   userCodeEl.textContent = '';
 }
 
+function setAccountPanel(open) {
+  if (!accountPanel) return;
+  accountPanel.hidden = !open;
+  accountPanelOpen = open;
+  if (accountButton) {
+    accountButton.setAttribute('aria-expanded', open ? 'true' : 'false');
+    accountButton.classList.toggle('active', open);
+  }
+  if (!open) {
+    hideDeviceLogin();
+  }
+}
+
 function updateAccountUi() {
   const { account } = launcherState;
   const loggedIn = Boolean(account?.loggedIn);
@@ -143,7 +155,7 @@ function updateAccountUi() {
   }
   accountButton.classList.toggle('show-name', loggedIn);
   if (accountPanel) {
-    accountPanel.hidden = false;
+    accountPanel.hidden = !accountPanelOpen;
   }
   if (loginButton) {
     loginButton.hidden = loggedIn;
@@ -161,6 +173,7 @@ async function startLoginFlow() {
     pollTimer = null;
   }
 
+  setAccountPanel(true);
   setAccountStatus('Starting Microsoft sign-in…');
   try {
     const deviceInfo = await window.hellas.beginDeviceLogin();
@@ -217,6 +230,7 @@ function startPollingForLogin(intervalOverride) {
         setAccountStatus(`Logged in as ${result.account.username}`);
         updateAccountUi();
         updateStartButtonState();
+        setAccountPanel(false);
         clearInterval(pollTimer);
         pollTimer = null;
       }
@@ -259,6 +273,9 @@ async function refreshState() {
 function closeDropdownOnClickOutside(event) {
   if (!dropdown.contains(event.target) && !menuButton.contains(event.target) && !accountButton.contains(event.target)) {
     setDropdown(false);
+    if (accountPanelOpen && accountPanel && !accountPanel.contains(event.target)) {
+      setAccountPanel(false);
+    }
   }
 }
 
@@ -267,20 +284,21 @@ document.addEventListener('click', closeDropdownOnClickOutside);
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     setDropdown(false);
+    setAccountPanel(false);
   }
 });
 
 menuButton.addEventListener('click', () => {
   setDropdown(!dropdown.classList.contains('open'));
+  setAccountPanel(false);
 });
 
 accountButton.addEventListener('click', async () => {
+  setDropdown(false);
+  setAccountPanel(!accountPanelOpen);
   if (launcherState.account.loggedIn) {
     setAccountStatus(`Logged in as ${launcherState.account.username}`);
-    accountButton.classList.add('show-name');
-    return;
   }
-  await startLoginFlow();
 });
 
 logoButton.addEventListener('click', () => {
@@ -371,6 +389,7 @@ startButton.addEventListener('click', async () => {
   } else {
     if (!launcherState.account.loggedIn) {
       setAccountStatus('Please log in before launching.', true);
+      setAccountPanel(true);
       return;
     }
 
