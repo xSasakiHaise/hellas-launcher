@@ -35,7 +35,7 @@ The resulting executable is placed in `dist/Hellas Launcher.exe`.
 
 ## Environment variables
 
-The launcher reads configuration from `.env`. See `.env.example` for the full list of options. At minimum you should set `WEBSITE_URL`, `DYNMAP_URL`, and either `PACK_FEED_URL` or `PACK_ZIP_URL`.
+The launcher reads configuration from `.env`. See `.env.example` for the full list of options. At minimum you should set `WEBSITE_URL`, `DYNMAP_URL`, and either `PACK_FEED_URL` or `PACK_ZIP_URL`. If neither is provided, the launcher falls back to downloading the latest pack from `https://hellasregion.com/download/latest`.
 
 ## Development
 

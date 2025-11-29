@@ -5,25 +5,28 @@ const crypto = require('crypto');
 const fetch = require('node-fetch');
 const AdmZip = require('adm-zip');
 
+const DEFAULT_PACK_URL = 'https://hellasregion.com/download/latest';
 const PROGRESS_PHASE_DOWNLOAD = 80; // percent allocated to download progress
 
 function resolveUpdateSource() {
-  const feedUrl = process.env.PACK_FEED_URL;
-  const directUrl = process.env.PACK_ZIP_URL;
+  const feedUrl = (process.env.PACK_FEED_URL || '').trim();
+  const directUrl = (process.env.PACK_ZIP_URL || '').trim();
 
   if (feedUrl) {
     return {
       type: 'feed',
-      feedUrl: feedUrl.trim(),
+      feedUrl,
       version: null,
       sha256: null
     };
   }
 
-  if (directUrl) {
+  const resolvedDirectUrl = directUrl || DEFAULT_PACK_URL;
+
+  if (resolvedDirectUrl) {
     return {
       type: 'direct',
-      url: directUrl.trim(),
+      url: resolvedDirectUrl,
       version: process.env.PACK_VERSION || null,
       sha256: process.env.PACK_EXPECTED_SHA256 || null
     };
