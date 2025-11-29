@@ -6,6 +6,7 @@ const accountButton = document.getElementById('account-button');
 const accountUsername = document.getElementById('account-username');
 const closeButton = document.getElementById('close-button');
 const maximizeButton = document.getElementById('maximize-button');
+const accountModal = document.getElementById('account-modal');
 const topBar = document.querySelector('.top-bar');
 const dropdown = document.getElementById('dropdown');
 const termsCheckbox = document.getElementById('terms-checkbox');
@@ -24,6 +25,7 @@ const userCodeEl = document.getElementById('user-code');
 const deviceMessage = document.getElementById('device-message');
 const openLoginButton = document.getElementById('open-login');
 const copyCodeButton = document.getElementById('copy-code');
+const closeAccountModal = document.getElementById('close-account-modal');
 
 let launcherState = {
   termsAccepted: false,
@@ -98,6 +100,7 @@ function setUpdating(isUpdating) {
   startButton.disabled = isUpdating || !launcherState.termsAccepted;
   updateButton.disabled = isUpdating;
   updateProgress.hidden = !isUpdating;
+  updateProgress.classList.remove('error');
   const updateLabel = updateButton.querySelector('.label');
   if (isUpdating) {
     if (updateLabel) updateLabel.textContent = 'Updating…';
@@ -114,6 +117,15 @@ function handleProgress(payload) {
   if (!payload) {
     return;
   }
+  if (payload.state === 'error') {
+    updateProgress.classList.add('error');
+    updateProgressBar.style.width = '0%';
+    updateProgressText.textContent = payload.message || 'Download failed. Please try again.';
+    setUpdating(false);
+    updateProgress.hidden = false;
+    return;
+  }
+
   if (payload.state === 'complete') {
     updateProgressBar.style.width = '100%';
     updateProgressText.textContent = payload.version ? `Updated to ${payload.version}` : 'Update complete';
@@ -121,9 +133,22 @@ function handleProgress(payload) {
     return;
   }
 
+  if (payload.state === 'fetching-feed') {
+    updateProgressText.textContent = 'Fetching pack info…';
+    updateProgress.hidden = false;
+  }
+
   if (typeof payload.progress === 'number') {
-    updateProgressBar.style.width = `${Math.max(0, Math.min(100, payload.progress))}%`;
-    updateProgressText.textContent = `${payload.progress}%`;
+    const clamped = Math.max(0, Math.min(100, payload.progress));
+    updateProgressBar.style.width = `${clamped}%`;
+    const stateLabel =
+      {
+        'fetching-feed': 'Fetching pack info…',
+        downloading: 'Downloading…',
+        extracting: 'Extracting…',
+        finalizing: 'Finalizing…'
+      }[payload.state] || 'Updating…';
+    updateProgressText.textContent = `${stateLabel} ${clamped}%`;
   }
 }
 
@@ -135,13 +160,19 @@ function hideDeviceLogin() {
 }
 
 function setAccountPanel(open) {
-  if (!accountPanel) return;
-  accountPanel.hidden = !open;
   accountPanelOpen = open;
   if (accountButton) {
     accountButton.setAttribute('aria-expanded', open ? 'true' : 'false');
     accountButton.classList.toggle('active', open);
   }
+
+  if (accountModal) {
+    accountModal.hidden = !open;
+  }
+  if (accountPanel) {
+    accountPanel.hidden = !open;
+  }
+
   if (!open) {
     hideDeviceLogin();
   }
@@ -154,6 +185,9 @@ function updateAccountUi() {
     accountUsername.textContent = loggedIn ? account.username : '';
   }
   accountButton.classList.toggle('show-name', loggedIn);
+  if (accountModal) {
+    accountModal.hidden = !accountPanelOpen;
+  }
   if (accountPanel) {
     accountPanel.hidden = !accountPanelOpen;
   }
@@ -273,9 +307,6 @@ async function refreshState() {
 function closeDropdownOnClickOutside(event) {
   if (!dropdown.contains(event.target) && !menuButton.contains(event.target) && !accountButton.contains(event.target)) {
     setDropdown(false);
-    if (accountPanelOpen && accountPanel && !accountPanel.contains(event.target)) {
-      setAccountPanel(false);
-    }
   }
 }
 
@@ -300,6 +331,18 @@ accountButton.addEventListener('click', async () => {
     setAccountStatus(`Logged in as ${launcherState.account.username}`);
   }
 });
+
+if (closeAccountModal) {
+  closeAccountModal.addEventListener('click', () => setAccountPanel(false));
+}
+
+if (accountModal) {
+  accountModal.addEventListener('click', (event) => {
+    if (event.target === accountModal) {
+      setAccountPanel(false);
+    }
+  });
+}
 
 logoButton.addEventListener('click', () => {
   window.hellas.openExternal(launcherState.websiteUrl || 'https://hellasregion.com');
@@ -380,8 +423,11 @@ startButton.addEventListener('click', async () => {
       updateStartButtonState();
     } catch (error) {
       console.error(error);
+      updateProgress.classList.add('error');
+      updateProgressText.textContent = error.message || 'Install failed.';
       setAccountStatus(error.message || 'Install failed.', true);
       setUpdating(false);
+      updateProgress.hidden = false;
     } finally {
       startButton.querySelector('.label').textContent = 'PLAY';
       startButton.disabled = false;
@@ -428,8 +474,12 @@ updateButton.addEventListener('click', async () => {
     }
   } catch (error) {
     console.error(error);
-    updateProgressText.textContent = 'Update failed';
-    setTimeout(() => setUpdating(false), 2500);
+    updateProgress.classList.add('error');
+    updateProgressText.textContent = error.message || 'Update failed';
+    setTimeout(() => {
+      setUpdating(false);
+      updateProgress.hidden = false;
+    }, 2500);
   }
 });
 
@@ -464,8 +514,12 @@ dropdownActions.forEach((button) => {
           updateStartButtonState();
         } catch (error) {
           console.error(error);
-          updateProgressText.textContent = 'Reinstall failed';
-          setTimeout(() => setUpdating(false), 2500);
+          updateProgress.classList.add('error');
+          updateProgressText.textContent = error.message || 'Reinstall failed';
+          setTimeout(() => {
+            setUpdating(false);
+            updateProgress.hidden = false;
+          }, 2500);
         }
         break;
       case 'logout':

@@ -12,7 +12,11 @@
         <source src="../../assets/bg/aetherveil-bg.webm" type="video/webm" />
         <source src="../../assets/bg/aetherveil-bg.mp4" type="video/mp4" />
       </video>
-      <img id="bg-fallback" src="../../assets/bg/aetherveil-fallback.png" alt="Aetherveil background" />
+      <img
+        id="bg-fallback"
+        src="../../assets/bg/aetherveil-fallback.png"
+        alt="Aetherveil background"
+      />
     </div>
 
     <div class="overlay">
@@ -21,7 +25,12 @@
           <img src="../../assets/icons/icon.png" alt="Hellas logo" />
         </button>
         <div class="menu">
-          <button id="account-button" class="icon-button account-button" aria-haspopup="true" aria-expanded="false">
+          <button
+            id="account-button"
+            class="icon-button account-button"
+            aria-haspopup="true"
+            aria-expanded="false"
+          >
             <span class="icon account"></span>
             <span class="account-name" id="account-username"></span>
           </button>
@@ -51,33 +60,6 @@
             <h1>Hellas Launcher</h1>
             <p class="subtitle">Enter the Hellas Region</p>
           </div>
-          <div class="account-panel" id="account-panel" hidden>
-            <p class="account-note">Sign in with your Microsoft account to verify Minecraft ownership. You’ll stay signed in on this device.</p>
-            <div class="account-actions">
-              <button id="login-button" class="secondary small">Sign in with Microsoft</button>
-              <span id="account-status" class="account-status" role="status"></span>
-            </div>
-            <div class="device-login" id="device-login" hidden>
-              <p>Enter this code at the Microsoft sign-in page:</p>
-              <div class="code-row">
-                <code id="user-code"></code>
-                <button id="copy-code" class="tertiary small" type="button">Copy</button>
-              </div>
-              <div class="device-actions">
-                <button id="open-login" class="secondary small" type="button">Open login.microsoft.com</button>
-                <span id="device-message" class="device-message" role="status"></span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </header>
-
-      <main class="content">
-        <section class="card">
-          <div class="card-header">
-            <h1>Hellas Launcher</h1>
-            <p class="subtitle">Enter the Hellas Region</p>
-          </div>
           <div class="status-row">
             <span id="install-state">Checking installation…</span>
             <span id="version-label"></span>
@@ -86,19 +68,56 @@
             <input type="checkbox" id="terms-checkbox" />
             <span>I have read and accept the Terms &amp; Conditions.</span>
           </label>
-          <button id="start-button" class="primary" disabled>
-            <span class="lock"></span>
-            <span class="label">Start</span>
-          </button>
-          <button id="update-button" class="secondary">
-            <span class="label">Update</span>
-          </button>
-          <div class="progress" id="update-progress" hidden>
-            <div class="bar" id="update-progress-bar"></div>
-            <span class="progress-text" id="update-progress-text"></span>
+          <div class="actions">
+            <button id="start-button" class="primary" disabled>
+              <span class="lock"></span>
+              <span class="label">Start</span>
+            </button>
+            <button id="update-button" class="secondary">
+              <span class="label">Update</span>
+            </button>
+            <div class="progress" id="update-progress" hidden>
+              <div class="bar" id="update-progress-bar"></div>
+              <span class="progress-text" id="update-progress-text"></span>
+            </div>
           </div>
         </section>
       </main>
+    </div>
+
+    <div class="modal-backdrop" id="account-modal" hidden>
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <h2>Sign in with Microsoft</h2>
+            <p class="subtitle">Verify your Minecraft ownership to continue.</p>
+          </div>
+          <button id="close-account-modal" class="icon-button close-button" title="Close login">
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
+        <div class="account-panel" id="account-panel" hidden>
+          <p class="account-note">
+            Sign in with your Microsoft account to verify Minecraft ownership. You’ll stay signed in on this
+            device.
+          </p>
+          <div class="account-actions">
+            <button id="login-button" class="secondary small">Sign in with Microsoft</button>
+            <span id="account-status" class="account-status" role="status"></span>
+          </div>
+          <div class="device-login" id="device-login" hidden>
+            <p>Enter this code at the Microsoft sign-in page:</p>
+            <div class="code-row">
+              <code id="user-code"></code>
+              <button id="copy-code" class="tertiary small" type="button">Copy</button>
+            </div>
+            <div class="device-actions">
+              <button id="open-login" class="secondary small" type="button">Open login.microsoft.com</button>
+              <span id="device-message" class="device-message" role="status"></span>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script src="renderer.js"></script>
