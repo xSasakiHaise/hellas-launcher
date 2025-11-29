@@ -295,11 +295,28 @@ startButton.addEventListener('click', async () => {
   if (!launcherState.installation.isInstalled) {
     startButton.disabled = true;
     startButton.querySelector('.label').textContent = 'INSTALLING…';
-    const installation = await window.hellas.performInstall();
-    launcherState.installation = installation;
-    startButton.querySelector('.label').textContent = 'PLAY';
-    startButton.disabled = false;
-    updateInstallLabels();
+    setUpdating(true);
+    updateProgressText.textContent = 'Preparing…';
+    try {
+      const result = await window.hellas.performInstall();
+      if (result && result.installation) {
+        launcherState.installation = result.installation;
+      }
+      if (result && result.version) {
+        launcherState.update.preferredVersion = result.version;
+        await window.hellas.updateKnownVersion(result.version);
+        launcherState.update.available = false;
+      }
+      updateInstallLabels();
+      updateStartButtonState();
+    } catch (error) {
+      console.error(error);
+      setAccountStatus(error.message || 'Install failed.', true);
+      setUpdating(false);
+    } finally {
+      startButton.querySelector('.label').textContent = 'PLAY';
+      startButton.disabled = false;
+    }
   } else {
     if (!launcherState.account.loggedIn) {
       setAccountStatus('Please log in before launching.', true);
