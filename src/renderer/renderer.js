@@ -93,16 +93,14 @@ function setDropdown(open) {
   menuButton.setAttribute('aria-expanded', expanded);
 }
 
-function updateStartButtonState() {
-  const { termsAccepted, installation, isUpdating } = launcherState;
-  const requiresInstall = !installation.isInstalled;
-  const buttonLabel = requiresInstall ? 'INSTALL' : 'PLAY';
-  startButton.querySelector('.label').textContent = buttonLabel;
-  startButton.disabled = !termsAccepted || isUpdating;
-  startButton.classList.toggle('needs-install', requiresInstall);
-  startButton.disabled = !termsAccepted || updateInProgress || launchInProgress;
-  startButton.classList.toggle('needs-install', !installation.isInstalled);
-}
+  function updateStartButtonState() {
+    const { termsAccepted, installation, isUpdating } = launcherState;
+    const requiresInstall = !installation.isInstalled;
+    const buttonLabel = requiresInstall ? 'INSTALL' : 'PLAY';
+    startButton.querySelector('.label').textContent = buttonLabel;
+    startButton.disabled = !termsAccepted || updateInProgress || launchInProgress || isUpdating;
+    startButton.classList.toggle('needs-install', requiresInstall);
+  }
 
 function updateInstallLabels() {
   const { installation } = launcherState;
@@ -140,46 +138,43 @@ function applyAnimationState() {
   }
 }
 
-function setUpdating(isUpdating) {
-  launcherState.isUpdating = isUpdating;
-  startButton.disabled = isUpdating || !launcherState.termsAccepted;
-function setUpdating(isUpdating, options = {}) {
-  const { resetText = true } = options;
-  updateInProgress = isUpdating;
-  startButton.disabled = isUpdating || !launcherState.termsAccepted || launchInProgress;
-  updateButton.disabled = isUpdating;
-  updateProgress.hidden = !isUpdating;
-  updateProgress.classList.remove('error');
-  const updateLabel = updateButton.querySelector('.label');
-  if (isUpdating) {
-    if (updateLabel) updateLabel.textContent = 'Updating…';
-  } else if (updateLabel) {
-    updateLabel.textContent = launcherState.update.hasUpdateSource ? 'Update' : 'No Update Source';
+  function setUpdating(isUpdating, options = {}) {
+    const { resetText = true } = options;
+    updateInProgress = isUpdating;
+    launcherState.isUpdating = isUpdating;
+    startButton.disabled = isUpdating || !launcherState.termsAccepted || launchInProgress;
+    updateButton.disabled = isUpdating;
+    updateProgress.hidden = !isUpdating;
+    updateProgress.classList.remove('error');
+    const updateLabel = updateButton.querySelector('.label');
+    if (isUpdating) {
+      if (updateLabel) updateLabel.textContent = 'Updating…';
+    } else if (updateLabel) {
+      updateLabel.textContent = launcherState.update.hasUpdateSource ? 'Update' : 'No Update Source';
+    }
+    if (!isUpdating && resetText) {
+      updateProgressBar.style.width = '0%';
+      updateProgressText.textContent = '';
+    }
+    if (cancelUpdateButton) {
+      cancelUpdateButton.hidden = !isUpdating;
+      cancelUpdateButton.disabled = !isUpdating;
+    }
   }
-  if (!isUpdating && resetText) {
-    updateProgressBar.style.width = '0%';
-    updateProgressText.textContent = '';
-  }
-  if (cancelUpdateButton) {
-    cancelUpdateButton.hidden = !isUpdating;
-    cancelUpdateButton.disabled = !isUpdating;
-  }
-}
 
 function handleProgress(payload) {
   if (!payload) {
     return;
   }
-  if (payload.state === 'error') {
-    updateProgress.classList.add('error');
-    updateProgressBar.style.width = '0%';
-    updateProgressText.textContent = payload.message || 'Download failed. Please try again.';
-    appendLaunchLog(payload.message || 'Download failed. Please try again.', 'error');
-    setUpdating(false);
-    setUpdating(false, { resetText: false });
-    updateProgress.hidden = false;
-    return;
-  }
+    if (payload.state === 'error') {
+      updateProgress.classList.add('error');
+      updateProgressBar.style.width = '0%';
+      updateProgressText.textContent = payload.message || 'Download failed. Please try again.';
+      appendLaunchLog(payload.message || 'Download failed. Please try again.', 'error');
+      setUpdating(false, { resetText: false });
+      updateProgress.hidden = false;
+      return;
+    }
 
   if (payload.state === 'cancelled') {
     updateProgress.classList.remove('error');
@@ -658,61 +653,62 @@ dropdownActions.forEach((button) => {
   button.addEventListener('click', async () => {
     const action = button.dataset.action;
     setDropdown(false);
-    switch (action) {
-      case 'dynmap':
-        await window.hellas.openExternal(launcherState.dynmapUrl || 'https://map.pixelmon-server.com');
-        break;
-      case 'toggle-animation':
-        launcherState.animationEnabled = !launcherState.animationEnabled;
-        await window.hellas.setAnimationEnabled(launcherState.animationEnabled);
-        applyAnimationState();
-        break;
-      case 'reinstall':
-        setUpdating(true);
-        updateProgressText.textContent = 'Reinstalling…';
-        let preserveProgress = false;
-        try {
-          const result = await window.hellas.freshReinstall();
-          if (result?.cancelled) {
-            updateProgressText.textContent = 'Reinstall cancelled.';
-            updateProgress.hidden = false;
-            setUpdating(false, { resetText: false });
-            preserveProgress = true;
-            return;
-          }
-          if (result && result.installation) {
-            launcherState.installation = result.installation;
-          }
-          if (result && result.version) {
-            launcherState.update.preferredVersion = result.version;
-            await window.hellas.updateKnownVersion(result.version);
-          }
-          launcherState.update.available = false;
-          updateInstallLabels();
-          updateStartButtonState();
-          setUpdating(false);
-        } catch (error) {
-          console.error(error);
-          if (error?.cancelled || error?.message === 'Update cancelled') {
-            updateProgress.classList.remove('error');
-            updateProgressText.textContent = 'Reinstall cancelled.';
-            setUpdating(false, { resetText: false });
-            updateProgress.hidden = false;
-            preserveProgress = true;
-          } else {
-            updateProgress.classList.add('error');
-            updateProgressText.textContent = error.message || 'Reinstall failed';
-            setTimeout(() => {
+      switch (action) {
+        case 'dynmap':
+          await window.hellas.openExternal(launcherState.dynmapUrl || 'https://map.pixelmon-server.com');
+          break;
+        case 'toggle-animation':
+          launcherState.animationEnabled = !launcherState.animationEnabled;
+          await window.hellas.setAnimationEnabled(launcherState.animationEnabled);
+          applyAnimationState();
+          break;
+        case 'reinstall': {
+          setUpdating(true);
+          updateProgressText.textContent = 'Reinstalling…';
+          let preserveProgress = false;
+          try {
+            const result = await window.hellas.freshReinstall();
+            if (result?.cancelled) {
+              updateProgressText.textContent = 'Reinstall cancelled.';
+              updateProgress.hidden = false;
+              setUpdating(false, { resetText: false });
+              preserveProgress = true;
+              return;
+            }
+            if (result && result.installation) {
+              launcherState.installation = result.installation;
+            }
+            if (result && result.version) {
+              launcherState.update.preferredVersion = result.version;
+              await window.hellas.updateKnownVersion(result.version);
+            }
+            launcherState.update.available = false;
+            updateInstallLabels();
+            updateStartButtonState();
+            setUpdating(false);
+          } catch (error) {
+            console.error(error);
+            if (error?.cancelled || error?.message === 'Update cancelled') {
+              updateProgress.classList.remove('error');
+              updateProgressText.textContent = 'Reinstall cancelled.';
               setUpdating(false, { resetText: false });
               updateProgress.hidden = false;
-            }, 2500);
+              preserveProgress = true;
+            } else {
+              updateProgress.classList.add('error');
+              updateProgressText.textContent = error.message || 'Reinstall failed';
+              setTimeout(() => {
+                setUpdating(false, { resetText: false });
+                updateProgress.hidden = false;
+              }, 2500);
+            }
+          } finally {
+            if (preserveProgress) {
+              updateProgress.hidden = false;
+            }
           }
-        } finally {
-          if (preserveProgress) {
-            updateProgress.hidden = false;
-          }
+          break;
         }
-        break;
       case 'logout':
         await window.hellas.logout();
         launcherState.account = { username: '', loggedIn: false };
