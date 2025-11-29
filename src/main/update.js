@@ -60,27 +60,48 @@ async function fetchFeedManifest(feedUrl) {
 
 async function downloadAndExtractUpdate(source, targetDir, progressCallback = () => {}) {
   let resolved = { ...source };
-
-  if (source.type === 'feed') {
-    progressCallback({ state: 'fetching-feed' });
-    resolved = await fetchFeedManifest(source.feedUrl);
-  }
-
-  if (!resolved.url) {
-    throw new Error('No update URL could be resolved.');
-  }
-
-  const tempZipPath = path.join(os.tmpdir(), `hellas-update-${Date.now()}.zip`);
-  const response = await fetch(resolved.url);
-  if (!response.ok) {
-    throw new Error(`Failed to download update archive (${response.status})`);
-  }
-
-  const totalBytes = Number(response.headers.get('content-length') || 0);
-  const hasher = resolved.sha256 ? crypto.createHash('sha256') : null;
-  let downloaded = 0;
+  let tempZipPath = null;
 
   try {
+    if (source.type === 'feed') {
+      progressCallback({ state: 'fetching-feed' });
+      resolved = await fetchFeedManifest(source.feedUrl);
+    }
+
+    if (!resolved.url) {
+      throw new Error('No update URL could be resolved.');
+    }
+
+    tempZipPath = path.join(os.tmpdir(), `hellas-update-${Date.now()}.zip`);
+    let response = await fetch(resolved.url, {
+      headers: { 'Cache-Control': 'no-cache' }
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to download update archive (${response.status})`);
+    }
+
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const manifest = await response.json();
+      const pack = manifest.modpack || manifest;
+      if (!pack?.url) {
+        throw new Error('Update descriptor missing the modpack URL.');
+      }
+      resolved.url = pack.url;
+      resolved.version = pack.version || resolved.version || null;
+      resolved.sha256 = pack.sha256 || pack.hash || resolved.sha256 || null;
+
+      response = await fetch(resolved.url);
+      if (!response.ok) {
+        throw new Error(`Failed to download update archive (${response.status})`);
+      }
+    }
+
+    const totalBytes = Number(response.headers.get('content-length') || 0);
+    const hasher = resolved.sha256 ? crypto.createHash('sha256') : null;
+    let downloaded = 0;
+
     await new Promise((resolve, reject) => {
       const fileStream = fs.createWriteStream(tempZipPath);
 
@@ -133,8 +154,13 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
     zip.extractAllTo(targetDir, true);
 
     progressCallback({ state: 'finalizing', progress: 95 });
+  } catch (error) {
+    progressCallback({ state: 'error', message: error.message || 'Update failed' });
+    throw error;
   } finally {
-    await fs.promises.unlink(tempZipPath).catch(() => {});
+    if (tempZipPath) {
+      await fs.promises.unlink(tempZipPath).catch(() => {});
+    }
   }
 
   return { version: resolved.version || null };
