@@ -11,6 +11,7 @@ contextBridge.exposeInMainWorld('hellas', {
   logout: () => ipcRenderer.invoke('hellas:logout'),
   close: () => ipcRenderer.invoke('hellas:close'),
   triggerUpdate: () => ipcRenderer.invoke('hellas:trigger-update'),
+  freshReinstall: () => ipcRenderer.invoke('hellas:fresh-reinstall'),
   getInstallation: () => ipcRenderer.invoke('hellas:get-installation'),
   launchGame: () => ipcRenderer.invoke('hellas:launch-game'),
   updateKnownVersion: (version) => ipcRenderer.invoke('hellas:update-known-version', version),

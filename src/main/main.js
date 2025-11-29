@@ -5,7 +5,7 @@ const Store = require('electron-store');
 const semver = require('semver');
 require('dotenv').config();
 
-const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest } = require('./update');
+const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall } = require('./update');
 const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
 const { launchModpack } = require('./launcher');
 
@@ -288,6 +288,23 @@ ipcMain.handle('hellas:trigger-update', async () => {
   sendUpdateProgress({ state: 'downloading', progress: 0 });
   const installDir = getInstallDir();
   const result = await downloadAndExtractUpdate(updateSource, installDir, sendUpdateProgress);
+  if (result.version) {
+    store.set('installedVersion', result.version);
+    store.set('lastKnownVersion', result.version);
+  }
+  sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
+  return { installation: getInstallationState(), version: result.version || null };
+});
+
+ipcMain.handle('hellas:fresh-reinstall', async () => {
+  const updateSource = resolveUpdateSource();
+  if (!updateSource || !updateSource.url) {
+    throw new Error('Update source is not configured.');
+  }
+
+  sendUpdateProgress({ state: 'downloading', progress: 0 });
+  const installDir = getInstallDir();
+  const result = await freshReinstall(installDir, sendUpdateProgress);
   if (result.version) {
     store.set('installedVersion', result.version);
     store.set('lastKnownVersion', result.version);
