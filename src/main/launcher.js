@@ -9,6 +9,9 @@ const os = require('os');
 const DEFAULT_MC_VERSION = '1.16.5';
 const FORGE_METADATA_URL = 'https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml';
 const VERSION_MANIFEST_URL = 'https://launchermeta.mojang.com/mc/game/version_manifest_v2.json';
+const LOG4J_CONFIG_FILENAME = 'log4j2_112-116.xml';
+const LOG4J_CONFIG_URL =
+  'https://launcher.mojang.com/v1/objects/02937d122c86ce73319ef9975b58896fc1b491d1/log4j2_112-116.xml';
 const launcher = new Client();
 
 function getBundledJavaPath() {
@@ -74,7 +77,7 @@ function calculateMemoryAllocation(memorySettings = {}) {
   };
 }
 
-function buildJvmArgs(memorySettings = {}) {
+function buildJvmArgs(memorySettings = {}, logConfigPath = LOG4J_CONFIG_FILENAME) {
   const plan = buildMemoryPlan(memorySettings);
   const memoryArgs = [`-Xmx${plan.maxMb}M`, `-Xms${plan.minMb}M`];
 
@@ -82,7 +85,7 @@ function buildJvmArgs(memorySettings = {}) {
     ...memoryArgs,
     '-Dfml.ignoreInvalidMinecraftCertificates=true',
     '-Dfml.ignorePatchDiscrepancies=true',
-    '-Dlog4j.configurationFile=log4j2_112-116.xml'
+    `-Dlog4j.configurationFile=${logConfigPath}`
   ];
 
   const userJvmArgs = Array.isArray(memorySettings.jvmArgs)
@@ -125,13 +128,12 @@ function getForgeInstallerPath(installDir, forgeVersion) {
 
 async function findGameDirectory(installDir) {
   const modpackDir = path.join(installDir, 'modpack');
-  const modpackExists = await fsp
-    .stat(modpackDir)
-    .then((stats) => stats.isDirectory())
-    .catch(() => false);
-
-  if (modpackExists) {
+  try {
+    await fsp.mkdir(modpackDir, { recursive: true });
     return modpackDir;
+  } catch (error) {
+    // Fall back to the legacy detection logic below if we cannot create the modpack directory.
+    // This preserves compatibility for custom setups while still preferring the modpack path.
   }
 
   const entries = await fsp.readdir(installDir, { withFileTypes: true });
@@ -205,6 +207,23 @@ async function downloadToFile(url, destinationPath, onStatus) {
   });
 
   onStatus?.({ message: `Downloaded ${path.basename(destinationPath)}` });
+}
+
+async function ensureLog4jConfig(installDir, onStatus) {
+  const log4jPath = path.join(installDir, LOG4J_CONFIG_FILENAME);
+  const exists = await fsp
+    .stat(log4jPath)
+    .then((stats) => stats.isFile())
+    .catch(() => false);
+
+  if (exists) {
+    return log4jPath;
+  }
+
+  onStatus?.({ message: 'Downloading Log4j configuration…' });
+  await downloadToFile(LOG4J_CONFIG_URL, log4jPath, onStatus);
+
+  return log4jPath;
 }
 
 async function ensureMinecraftVersion(installDir, minecraftVersion = DEFAULT_MC_VERSION, onStatus) {
@@ -441,6 +460,8 @@ async function ensureBaseRuntime({ installDir, onStatus = () => {} }) {
   onStatus({ message: 'Checking Forge installer…' });
   await ensureForgeInstaller(installDir, forgeVersion, onStatus);
 
+  await ensureLog4jConfig(installDir, onStatus);
+
   return { minecraftVersion, forgeVersion };
 }
 
@@ -555,7 +576,10 @@ async function launchModpack({
   });
 
   onStatus({ message: `Launching with Forge ${forgeVersion}` });
-  const jvmArgs = buildJvmArgs(memorySettings);
+  const log4jConfigPath = await ensureLog4jConfig(installDir, onStatus).catch((error) => {
+    throw new Error(`Failed to prepare Log4j configuration: ${error.message}`);
+  });
+  const jvmArgs = buildJvmArgs(memorySettings, log4jConfigPath);
   const javaPath = getBundledJavaPath();
   if (!javaPath) {
     onStatus({
