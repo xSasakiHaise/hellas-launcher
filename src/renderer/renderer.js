@@ -184,6 +184,13 @@ function readMemoryForm() {
   };
 }
 
+function ensureCustomModeSelected() {
+  if (memoryModeCustom && !memoryModeCustom.checked) {
+    memoryModeCustom.checked = true;
+    syncMemoryForm();
+  }
+}
+
 function setDropdown(open) {
   dropdown.classList.toggle('open', open);
   const expanded = open ? 'true' : 'false';
@@ -613,9 +620,36 @@ if (memoryModeAuto && memoryModeCustom) {
   });
 }
 
+if (memoryCustomFields) {
+  memoryCustomFields.addEventListener('focusin', () => {
+    ensureCustomModeSelected();
+  });
+  memoryCustomFields.addEventListener('click', () => {
+    ensureCustomModeSelected();
+  });
+}
+
+[memoryMaxInput, memoryMinInput].forEach((input) => {
+  input?.addEventListener('input', () => {
+    ensureCustomModeSelected();
+  });
+});
+
 if (saveMemoryButton) {
   saveMemoryButton.addEventListener('click', async () => {
     const payload = readMemoryForm();
+    if (payload.mode === 'custom') {
+      const maxValid = Number.isFinite(payload.maxMb) && payload.maxMb > 0;
+      const minValid = Number.isFinite(payload.minMb) && payload.minMb > 0;
+      if (!maxValid || !minValid) {
+        appendLaunchLog('Enter valid custom memory values in megabytes.', 'error');
+        return;
+      }
+      if (payload.minMb > payload.maxMb) {
+        appendLaunchLog('Minimum RAM cannot exceed the maximum value.', 'error');
+        return;
+      }
+    }
     try {
       const state = await window.hellas.setMemorySettings(payload);
       applyMemoryState(state || {});
