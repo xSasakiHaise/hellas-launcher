@@ -108,11 +108,16 @@ async function ensureForgeInstaller(installDir, forgeVersion, onStatus) {
   return installerPath;
 }
 
-async function detectModpackVersion(modsPaths, expectedModpackJar = null) {
+async function detectModpackVersion(modsPaths, expectedModpackJar = null, modpackErrors = []) {
   let detectedVersion = null;
 
   for (const modsPath of modsPaths) {
-    const entries = await fsp.readdir(modsPath, { withFileTypes: true }).catch(() => []);
+    const entries = await fsp
+      .readdir(modsPath, { withFileTypes: true })
+      .catch((error) => {
+        modpackErrors.push({ path: modsPath, message: error.message, code: error.code });
+        return [];
+      });
     for (const entry of entries) {
       if (!entry.isFile()) continue;
       const match = entry.name.match(/^hellasforms-([\w.-]+)\.jar$/i);
@@ -145,6 +150,7 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
   const modpackDir = path.join(installDir, 'modpack');
   const modsPath = path.join(modpackDir, 'mods');
   const fallbackModsPath = path.join(installDir, 'mods');
+  const modpackErrors = [];
 
   const minecraftPresent = await fs
     .access(minecraftPath)
@@ -159,15 +165,26 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
     : await fs
         .access(forgeInstallerPath)
         .then(() => true)
-        .catch(() => false);
+    .catch(() => false);
 
   const expectedModpackJar = expectedModpackVersion ? `hellasforms-${expectedModpackVersion}.jar` : null;
-  const primaryModsEntries = await fsp.readdir(modsPath).catch(() => []);
-  const fallbackModsEntries = await fsp.readdir(fallbackModsPath).catch(() => []);
+  const primaryModsEntries = await fsp
+    .readdir(modsPath)
+    .catch((error) => {
+      modpackErrors.push({ path: modsPath, message: error.message, code: error.code });
+      return [];
+    });
+  const fallbackModsEntries = await fsp
+    .readdir(fallbackModsPath)
+    .catch((error) => {
+      modpackErrors.push({ path: fallbackModsPath, message: error.message, code: error.code });
+      return [];
+    });
 
   const { modpackJarPresent, detectedVersion } = await detectModpackVersion(
     [modsPath, fallbackModsPath],
-    expectedModpackJar
+    expectedModpackJar,
+    modpackErrors
   );
 
   const modpackPresent = modpackJarPresent || primaryModsEntries.length > 0;
@@ -178,6 +195,7 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
     forgeVersion,
     forgeInstallerPath,
     modpackVersion: detectedVersion,
+    modpackErrors,
     requirements: {
       minecraft: minecraftPresent,
       forge: forgePresent,
@@ -202,7 +220,7 @@ async function launchModpack({
 
   await ensureInstallDirExists(installDir);
   onStatus({ message: `Checking installation in ${installDir}` });
-  const { requirements, forgeVersion, forgeInstallerPath } = await checkLaunchRequirements(
+  const { requirements, forgeVersion, forgeInstallerPath, modpackErrors } = await checkLaunchRequirements(
     installDir,
     expectedModpackVersion
   );
@@ -212,10 +230,14 @@ async function launchModpack({
 
   const missingCritical = missing.filter((item) => item === 'modpack');
   if (missingCritical.length) {
+    const modpackErrorDetails = modpackErrors
+      .map((error) => `${error.path}: ${error.message}${error.code ? ` (${error.code})` : ''}`)
+      .join('; ');
+    const details = modpackErrorDetails ? ` Details: ${modpackErrorDetails}` : '';
     throw new Error(
       `Cannot launch yet. Missing components: ${missingCritical
         .map((item) => item.toUpperCase())
-        .join(', ')}`
+        .join(', ')}.${details}`
     );
   }
 

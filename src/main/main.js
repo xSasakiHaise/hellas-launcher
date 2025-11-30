@@ -115,6 +115,7 @@ async function getInstallationState() {
   let forgeVersion = null;
   let minecraftVersion = null;
   let detectedModpackVersion = null;
+  let modpackErrors = [];
   const expectedModpackVersion = store.get('lastKnownVersion') || store.get('installedVersion') || null;
 
   try {
@@ -123,6 +124,7 @@ async function getInstallationState() {
     forgeVersion = check.forgeVersion;
     minecraftVersion = check.minecraftVersion;
     detectedModpackVersion = check.modpackVersion || null;
+    modpackErrors = check.modpackErrors || [];
   } catch (error) {
     console.warn('Unable to verify installation readiness', error);
   }
@@ -148,6 +150,7 @@ async function getInstallationState() {
     isInstalled: readyToLaunch,
     installedVersion: resolvedInstalledVersion || installedVersion,
     lastKnownVersion,
+    modpackErrors,
     requirements,
     forgeVersion,
     minecraftVersion
@@ -434,11 +437,15 @@ ipcMain.handle('hellas:logout', async () => {
     installation.lastKnownVersion || installation.installedVersion || null;
 
   if (!installation.isInstalled) {
+    const modpackErrorDetails = (installation.modpackErrors || [])
+      .map((error) => `${error.path}: ${error.message}${error.code ? ` (${error.code})` : ''}`)
+      .join('; ');
+    const details = modpackErrorDetails ? ` Details: ${modpackErrorDetails}` : '';
     sendLaunchStatus({
-      message: 'Launch blocked: install the modpack before starting.',
+      message: `Launch blocked: install the modpack before starting.${details}`,
       level: 'error'
     });
-    throw new Error('Cannot launch until the modpack and dependencies are installed.');
+    throw new Error(`Cannot launch until the modpack and dependencies are installed.${details}`);
   }
 
     if (launchInProgress || isLaunching()) {
