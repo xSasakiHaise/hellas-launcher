@@ -84,7 +84,12 @@ function Test-PythonSupport {
   $pythonExecutable = $pythonCommand.Path
   $versionOutput = & $pythonExecutable --version 2>&1
 
-  if ($LASTEXITCODE -eq 0 -and $versionOutput -match 'Python\s+(?<major>\d+)\.(?<minor>\d+)') {
+  if ($LASTEXITCODE -ne 0) {
+    Write-Warning "Python command resolved to '$pythonExecutable' but failed to run ($versionOutput). Install Python 3 with pip support and disable the Microsoft Store alias under Settings > Apps > App execution aliases."
+    return
+  }
+
+  if ($versionOutput -match 'Python\s+(?<major>\d+)\.(?<minor>\d+)') {
     $major = [int]$Matches.major
     if ($major -lt 3) {
       Write-Warning "Python 3 is required for native module builds. Detected version: $versionOutput"
@@ -140,6 +145,54 @@ function Test-JsonCompliance {
   }
 }
 
+function Ensure-JavaRuntime {
+  $jreDir = Join-Path $PSScriptRoot "jre11-win64"
+  $javaExe = Join-Path $jreDir "bin/java.exe"
+
+  if (Test-Path $javaExe) {
+    Write-Host "Bundled Java 11 runtime found at $javaExe." -ForegroundColor Green
+    return
+  }
+
+  $downloadUrl = "https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.24+8/OpenJDK11U-jre_x64_windows_hotspot_11.0.24_8.zip"
+  $tempRoot = Join-Path ([IO.Path]::GetTempPath()) "hellas-launcher-jre11"
+  $tempZip = Join-Path $tempRoot "jre11.zip"
+  $extractDir = Join-Path $tempRoot "extracted"
+
+  if (Test-Path $tempRoot) {
+    Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+
+  Write-Host "Downloading Java 11 runtime..." -ForegroundColor Cyan
+  Invoke-WebRequest -Uri $downloadUrl -OutFile $tempZip
+
+  Write-Host "Extracting Java 11 runtime..." -ForegroundColor Cyan
+  Expand-Archive -Path $tempZip -DestinationPath $extractDir -Force
+
+  $extractedRoot = Get-ChildItem -Directory -Path $extractDir | Select-Object -First 1
+
+  if (-not $extractedRoot) {
+    throw "Failed to extract Java runtime from archive."
+  }
+
+  if (Test-Path $jreDir) {
+    Remove-Item $jreDir -Recurse -Force -ErrorAction SilentlyContinue
+  }
+
+  New-Item -ItemType Directory -Path $jreDir -Force | Out-Null
+  Move-Item -Path (Join-Path $extractedRoot.FullName '*') -Destination $jreDir -Force
+
+  Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+  if (-not (Test-Path $javaExe)) {
+    throw "Bundled Java runtime install failed; $javaExe not found."
+  }
+
+  Write-Host "Bundled Java 11 runtime installed to $jreDir." -ForegroundColor Green
+}
+
 Write-Host "== Hellas Launcher Build ==" -ForegroundColor Cyan
 
 $nodeHint = "Install Node.js LTS (includes npm) from https://nodejs.org/en/download and re-run this script."
@@ -156,17 +209,7 @@ Test-CommandAvailable npm $nodeHint
 
 Test-PythonSupport
 Test-JsonCompliance -Paths @("package.json", ".eslintrc.json")
-
-$jreDir = Join-Path $PSScriptRoot "jre11-win64"
-if (-not (Test-Path $jreDir)) {
-  Write-Warning "Bundled Java runtime folder '$jreDir' is missing. Create it and place a Java 11 runtime inside (or set BUNDLED_JAVA_PATH) before packaging."
-  New-Item -ItemType Directory -Path $jreDir -Force | Out-Null
-}
-
-$javaExe = Join-Path $jreDir "bin/java.exe"
-if (-not (Test-Path $javaExe)) {
-  Write-Warning "Java 11 executable not found at $javaExe. The launcher requires a bundled Java 11 runtime to avoid compatibility issues."
-}
+Ensure-JavaRuntime
 
 if (-not (Test-Path ".env")) {
   Copy-Item ".env.example" ".env"
