@@ -7,7 +7,7 @@ require('dotenv').config();
 
 const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall } = require('./update');
 const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
-const { launchModpack, cancelLaunch, isLaunching, checkLaunchRequirements } = require('./launcher');
+const { launchModpack, cancelLaunch, isLaunching, checkLaunchRequirements, ensureBaseRuntime } = require('./launcher');
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 let mainWindow;
@@ -135,7 +135,8 @@ async function getInstallationState() {
     installedVersion ||
     detectedModpackVersion ||
     (requirements.modpack ? expectedModpackVersion : '') ||
-    lastKnownVersion;
+    lastKnownVersion ||
+    (requirements.modpack ? 'unversioned' : '');
 
   if (detectedModpackVersion && detectedModpackVersion !== installedVersion) {
     store.set('installedVersion', detectedModpackVersion);
@@ -378,6 +379,9 @@ ipcMain.handle('hellas:poll-device-login', async (_event, payload) => {
         store.set('lastKnownVersion', result.version);
       }
 
+      sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
+      await ensureBaseRuntime({ installDir: dir, onStatus: sendInstallStatus });
+
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Installation completed successfully.', level: 'success' });
       return { installation: await getInstallationState(), version: result.version || null };
@@ -501,6 +505,9 @@ ipcMain.handle('hellas:cancel-launch', async () => {
         store.set('lastKnownVersion', result.version);
       }
 
+      sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
+      await ensureBaseRuntime({ installDir: installDir, onStatus: sendInstallStatus });
+
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Update completed.', level: 'success' });
       return { installation: await getInstallationState(), version: result.version || null };
@@ -533,6 +540,9 @@ ipcMain.handle('hellas:cancel-launch', async () => {
         store.set('installedVersion', result.version);
         store.set('lastKnownVersion', result.version);
       }
+
+      sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
+      await ensureBaseRuntime({ installDir: installDir, onStatus: sendInstallStatus });
 
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Reinstall finished.', level: 'success' });
