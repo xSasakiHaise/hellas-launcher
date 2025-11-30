@@ -209,23 +209,19 @@ async function detectModpackVersion(modsPaths, expectedModpackJar = null, modpac
   return { modpackJarPresent: Boolean(detectedVersion), detectedVersion };
 }
 
-async function inspectModsDirectory(modsPath, modpackErrors) {
-  const diagnostics = { path: modsPath, exists: false, entries: [], error: null };
-
-  try {
-    const entries = await fsp.readdir(modsPath, { withFileTypes: true });
-    diagnostics.exists = true;
-    diagnostics.entries = entries.map((entry) => entry.name);
-  } catch (error) {
-    diagnostics.error = error.message;
-    modpackErrors.push({ path: modsPath, message: error.message, code: error.code });
-  }
-
-  return diagnostics;
-}
-
 function uniquePaths(paths) {
   return Array.from(new Set(paths.filter(Boolean)));
+}
+
+async function readDirSafe(targetPath, modpackErrors) {
+  const entries = await fsp
+    .readdir(targetPath)
+    .catch((error) => {
+      modpackErrors.push({ path: targetPath, message: error.message, code: error.code });
+      return [];
+    });
+
+  return entries;
 }
 
 async function findNestedModDirectories(installDir, modpackErrors) {
@@ -277,9 +273,6 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
     fallbackModsPath,
     ...(await findNestedModDirectories(installDir, modpackErrors))
   ]);
-  const modDirectoryDiagnostics = await Promise.all(
-    modDirectories.map((dir) => inspectModsDirectory(dir, modpackErrors))
-  );
 
   const minecraftPresent = await fs
     .access(minecraftPath)
@@ -303,7 +296,7 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
         .catch(() => false);
 
   const expectedModpackJar = expectedModpackVersion ? `hellasforms-${expectedModpackVersion}.jar` : null;
-  const modsEntries = modDirectoryDiagnostics.map((diagnostic) => diagnostic.entries || []);
+  const modsEntries = await Promise.all(modDirectories.map((dir) => readDirSafe(dir, modpackErrors)));
 
   const { modpackJarPresent, detectedVersion } = await detectModpackVersion(
     modDirectories,
@@ -311,10 +304,7 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
     modpackErrors
   );
 
-  const modpackPresent =
-    modpackJarPresent ||
-    modsEntries.some((entries) => entries.length > 0) ||
-    modDirectoryDiagnostics.some((diag) => diag.exists);
+  const modpackPresent = modpackJarPresent || modsEntries.some((entries) => entries.length > 0);
 
   return {
     minecraftVersion,
@@ -369,14 +359,8 @@ async function launchModpack({
 
   await ensureInstallDirExists(installDir);
   onStatus({ message: `Checking installation in ${installDir}` });
-  const {
-    requirements,
-    forgeVersion,
-    forgeInstallerPath,
-    modpackErrors,
-    searchedModDirectories,
-    modpackDiagnostics
-  } = await checkLaunchRequirements(installDir, expectedModpackVersion);
+  const { requirements, forgeVersion, forgeInstallerPath, modpackErrors, searchedModDirectories } =
+    await checkLaunchRequirements(installDir, expectedModpackVersion);
   const missing = Object.entries(requirements)
     .filter(([, present]) => !present)
     .map(([key]) => key);
@@ -386,21 +370,10 @@ async function launchModpack({
     const modpackErrorDetails = modpackErrors
       .map((error) => `${error.path}: ${error.message}${error.code ? ` (${error.code})` : ''}`)
       .join('; ');
-    const diagnostics = modpackDiagnostics?.modDirectories || [];
-    const diagnosticSummary = diagnostics
-      .map((diag) => {
-        const existsPart = diag.exists ? 'exists' : 'missing';
-        const fileCount = Array.isArray(diag.entries) ? diag.entries.length : 0;
-        const errorPart = diag.error ? ` error: ${diag.error}` : '';
-        return `${diag.path} (${existsPart}, files: ${fileCount}${errorPart})`;
-      })
-      .join('; ');
     const searchedDirs = searchedModDirectories?.length
       ? ` Searched mod directories: ${searchedModDirectories.join(', ')}`
       : '';
-    const details = modpackErrorDetails
-      ? ` Details: ${modpackErrorDetails}.${searchedDirs}`
-      : `${searchedDirs}${diagnosticSummary ? ` Diagnostics: ${diagnosticSummary}` : ''}`;
+    const details = modpackErrorDetails ? ` Details: ${modpackErrorDetails}.${searchedDirs}` : searchedDirs;
     throw new Error(
       `Cannot launch yet. Missing components: ${missingCritical
         .map((item) => item.toUpperCase())

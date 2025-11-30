@@ -149,7 +149,6 @@ async function getInstallationState() {
   let detectedModpackVersion = null;
   let modpackErrors = [];
   let searchedModDirectories = [];
-  let modpackDiagnostics = null;
   const expectedModpackVersion = store.get('lastKnownVersion') || store.get('installedVersion') || null;
 
   try {
@@ -160,7 +159,6 @@ async function getInstallationState() {
     detectedModpackVersion = check.modpackVersion || null;
     modpackErrors = check.modpackErrors || [];
     searchedModDirectories = check.searchedModDirectories || [];
-    modpackDiagnostics = check.modpackDiagnostics || null;
   } catch (error) {
     console.warn('Unable to verify installation readiness', error);
   }
@@ -189,7 +187,6 @@ async function getInstallationState() {
     lastKnownVersion,
     modpackErrors,
     searchedModDirectories,
-    modpackDiagnostics,
     requirements,
     forgeVersion,
     minecraftVersion
@@ -503,25 +500,10 @@ ipcMain.handle('hellas:logout', async () => {
     const modpackErrorDetails = (installation.modpackErrors || [])
       .map((error) => `${error.path}: ${error.message}${error.code ? ` (${error.code})` : ''}`)
       .join('; ');
-    const diagnostics = installation.modpackDiagnostics?.modDirectories || [];
-    const diagnosticSummary = diagnostics
-      .map((diag) => {
-        const existsPart = diag.exists ? 'exists' : 'missing';
-        const fileCount = Array.isArray(diag.entries) ? diag.entries.length : 0;
-        const errorPart = diag.error ? ` error: ${diag.error}` : '';
-        return `${diag.path} (${existsPart}, files: ${fileCount}${errorPart})`;
-      })
-      .join('; ');
     const searchedDirs = installation.searchedModDirectories?.length
       ? ` Searched mod directories: ${installation.searchedModDirectories.join(', ')}`
       : '';
-    const details = modpackErrorDetails
-      ? ` Details: ${modpackErrorDetails}.${searchedDirs}`
-      : `${searchedDirs}${diagnosticSummary ? ` Diagnostics: ${diagnosticSummary}` : ''}`;
-    recordBehavior('launch-blocked', {
-      reason: 'missing-installation',
-      details
-    });
+    const details = modpackErrorDetails ? ` Details: ${modpackErrorDetails}.${searchedDirs}` : searchedDirs;
     sendLaunchStatus({
       message: `Launch blocked: install the modpack before starting.${details}`,
       level: 'error'
@@ -538,11 +520,6 @@ ipcMain.handle('hellas:logout', async () => {
     const missing = Object.entries(installation.requirements || {})
       .filter(([, present]) => !present)
       .map(([key]) => key.toUpperCase());
-    recordBehavior('launch-start', {
-      installDir,
-      missing,
-      requirements: installation.requirements
-    });
     if (missing.length) {
       sendLaunchStatus({ message: `Resolving missing components: ${missing.join(', ')}` });
     }
@@ -554,11 +531,9 @@ ipcMain.handle('hellas:logout', async () => {
       expectedModpackVersion
     });
     sendLaunchStatus({ message: `Launch completed with Forge ${launchedWith}`, level: 'success' });
-    recordBehavior('launch-complete', { launchedWith, installDir });
     return { account: { username: account.username }, installDir, launchedWith };
   } catch (error) {
     sendLaunchStatus({ message: error.message || 'Failed to launch.', level: 'error' });
-    recordBehavior('launch-error', { message: error.message });
     throw error;
   } finally {
     launchInProgress = false;
