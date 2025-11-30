@@ -313,6 +313,10 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
     modpackVersion: detectedVersion,
     searchedModDirectories: modDirectories,
     modpackErrors,
+    modpackDiagnostics: {
+      modDirectories: modDirectoryDiagnostics,
+      expectedModpackJar
+    },
     requirements: {
       minecraft: minecraftPresent,
       forge: forgePresent,

@@ -16,6 +16,38 @@ let sessionAccount = { username: '', accessToken: '', refreshToken: '', uuid: ''
 let updateAbortController = null;
 let updateInProgress = false;
 let launchInProgress = false;
+const behaviorLog = [];
+let behaviorLogWritten = false;
+
+function recordBehavior(event, details = {}) {
+  behaviorLog.push({ timestamp: new Date().toISOString(), event, ...details });
+}
+
+function getBehaviorLogPath() {
+  const executableDir = path.dirname(app.getPath('exe'));
+  return path.join(executableDir, 'hellas-behavior.log');
+}
+
+function flushBehaviorLog() {
+  if (behaviorLogWritten || !behaviorLog.length) {
+    return;
+  }
+
+  const logPath = getBehaviorLogPath();
+  const header = `Hellas Launcher behavior log - ${new Date().toISOString()}`;
+  const lines = behaviorLog.map((entry) => {
+    const { timestamp, event, ...rest } = entry;
+    const data = Object.keys(rest).length ? ` ${JSON.stringify(rest)}` : '';
+    return `[${timestamp}] ${event}${data}`;
+  });
+
+  try {
+    fs.writeFileSync(logPath, [header, ...lines].join('\n'), 'utf8');
+    behaviorLogWritten = true;
+  } catch (error) {
+    console.warn('Failed to write behavior log', error);
+  }
+}
 
 function setUpdateInProgress(value) {
   updateInProgress = value;
@@ -162,18 +194,21 @@ async function getInstallationState() {
 }
 
 function sendUpdateProgress(payload) {
+  recordBehavior('update-progress', { payload });
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('hellas:update-progress', payload);
   }
 }
 
 function sendLaunchStatus(payload) {
+  recordBehavior('launch-status', { payload });
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('hellas:launch-status', payload);
   }
 }
 
   function sendInstallStatus(payload) {
+    recordBehavior('install-status', { payload });
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('hellas:install-status', payload);
     }
@@ -235,6 +270,7 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 
   mainWindow.on('close', (event) => {
+    recordBehavior('window-close-attempt', { updateInProgress });
     if (updateInProgress) {
       const choice = dialog.showMessageBoxSync(mainWindow, {
         type: 'question',
@@ -260,6 +296,7 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  recordBehavior('app-ready', { version: app.getVersion(), platform: process.platform });
   createStore();
   await attemptRestoreAccount();
   createWindow();
@@ -272,9 +309,15 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  flushBehaviorLog();
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  recordBehavior('app-before-quit');
+  flushBehaviorLog();
 });
 
 ipcMain.handle('hellas:get-state', async () => {
@@ -365,6 +408,8 @@ ipcMain.handle('hellas:poll-device-login', async (_event, payload) => {
 
     await fs.promises.mkdir(dir, { recursive: true });
 
+    recordBehavior('install-start', { dir, updateSource: updateSource.url });
+
     sendInstallStatus({ message: `Preparing installation into ${dir}` });
     sendUpdateProgress({ state: 'downloading', progress: 0 });
     try {
@@ -387,10 +432,12 @@ ipcMain.handle('hellas:poll-device-login', async (_event, payload) => {
 
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Installation completed successfully.', level: 'success' });
+      recordBehavior('install-complete', { dir, version: result.version || null });
       return { installation: await getInstallationState(), version: result.version || null };
     } catch (error) {
       sendInstallStatus({ message: error.message || 'Installation failed.', level: 'error' });
       sendUpdateProgress({ state: 'error', message: error.message || 'Installation failed.' });
+      recordBehavior('install-error', { message: error.message });
       throw error;
     }
   });
@@ -442,6 +489,12 @@ ipcMain.handle('hellas:logout', async () => {
   const installation = await getInstallationState();
   const expectedModpackVersion =
     installation.lastKnownVersion || installation.installedVersion || null;
+
+  recordBehavior('launch-attempt', {
+    installDir,
+    expectedModpackVersion,
+    account: account.username
+  });
 
   if (!installation.isInstalled) {
     const modpackErrorDetails = (installation.modpackErrors || [])
@@ -499,6 +552,7 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       throw new Error('Update source is not configured.');
     }
 
+    recordBehavior('update-start', { updateSource: updateSource.url });
     sendInstallStatus({ message: 'Starting update…' });
     sendUpdateProgress({ state: 'downloading', progress: 0 });
     const installDir = getInstallDir();
@@ -522,10 +576,12 @@ ipcMain.handle('hellas:cancel-launch', async () => {
 
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Update completed.', level: 'success' });
+      recordBehavior('update-complete', { installDir, version: result.version || null });
       return { installation: await getInstallationState(), version: result.version || null };
     } catch (error) {
       sendInstallStatus({ message: error.message || 'Update failed.', level: 'error' });
       sendUpdateProgress({ state: 'error', message: error.message || 'Update failed.' });
+      recordBehavior('update-error', { message: error.message });
       throw error;
     }
   });
@@ -537,6 +593,7 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       throw new Error('Update source is not configured.');
   }
 
+    recordBehavior('reinstall-start', { updateSource: updateSource.url });
     sendInstallStatus({ message: 'Starting fresh reinstall…' });
     sendUpdateProgress({ state: 'downloading', progress: 0 });
     const installDir = getInstallDir();
@@ -558,10 +615,12 @@ ipcMain.handle('hellas:cancel-launch', async () => {
 
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Reinstall finished.', level: 'success' });
+      recordBehavior('reinstall-complete', { installDir, version: result.version || null });
       return { installation: await getInstallationState(), version: result.version || null };
     } catch (error) {
       sendInstallStatus({ message: error.message || 'Reinstall failed.', level: 'error' });
       sendUpdateProgress({ state: 'error', message: error.message || 'Reinstall failed.' });
+      recordBehavior('reinstall-error', { message: error.message });
       throw error;
     }
   });
