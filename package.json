@@ -9,7 +9,8 @@
     "start": "electron .",
     "dev": "cross-env NODE_ENV=development electron .",
     "build": "cross-env NODE_ENV=production electron-builder --win portable",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test": "node --test"
   },
   "build": {
     "appId": "com.hellas.launcher",

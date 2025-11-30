@@ -274,23 +274,23 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
     ...(await findNestedModDirectories(installDir, modpackErrors))
   ]);
 
-  const minecraftPresent = await fs
+  const minecraftPresent = await fsp
     .access(minecraftPath)
     .then(() => true)
     .catch(() => false);
 
   const forgePresent = forgePath
-    ? await fs
+    ? await fsp
         .access(forgePath)
         .then(() => true)
         .catch(
           async () =>
-            await fs
+            await fsp
               .access(forgeInstallerPath)
               .then(() => true)
               .catch(() => false)
         )
-    : await fs
+    : await fsp
         .access(forgeInstallerPath)
         .then(() => true)
         .catch(() => false);
@@ -314,7 +314,7 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
     searchedModDirectories: modDirectories,
     modpackErrors,
     modpackDiagnostics: {
-      modDirectories: modDirectoryDiagnostics,
+      modDirectories,
       expectedModpackJar
     },
     requirements: {
