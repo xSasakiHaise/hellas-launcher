@@ -15,6 +15,8 @@ Hellas Launcher is a Windows portable Electron application for the Hellas Region
 
 - Windows 10/11
 - [Node.js LTS (>=18)](https://nodejs.org/en/download) (includes npm)
+- Python 3 with pip (disable the Windows Store alias under *Settings → Apps → App execution aliases*)
+- Java 11 runtime placed in `jre11-win64` for bundling (required at packaging time)
 - PowerShell with script execution enabled in the repository directory
 
 ## Quick start

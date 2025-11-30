@@ -1,9 +1,9 @@
 {
   "name": "hellas-launcher",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Hellas Launcher MVP for Windows with dynamic background and one-click updates.",
   "main": "src/main/main.js",
-  "author": "Hellas Region",
+  "author": "Hephaestus Forge",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
@@ -14,6 +14,7 @@
   },
   "build": {
     "appId": "com.hellas.launcher",
+    "copyright": "Copyright © 2025 Hephaestus Forge",
     "productName": "Hellas Launcher",
     "files": [
       "src/main/**/*",
@@ -41,11 +42,14 @@
       "target": [
         {
           "target": "portable",
-          "arch": ["x64"]
+          "arch": [
+            "x64"
+          ]
         }
       ],
       "icon": "assets/icons/icon.ico",
-      "artifactName": "Hellas Launcher.exe"
+      "artifactName": "Hellas Launcher.exe",
+      "publisherName": "Hephaestus Forge"
     }
   },
   "dependencies": {
