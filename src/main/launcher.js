@@ -5,8 +5,6 @@ const fsp = fs.promises;
 const { execFile } = require('child_process');
 const { Client } = require('minecraft-launcher-core');
 const os = require('os');
-const { resolveBundledJava } = require('./javaResolver');
-const { HELLAS_ROOT, INSTANCE_DIR } = require('./paths');
 
 const DEFAULT_MC_VERSION = '1.16.5';
 const FORGE_METADATA_URL = 'https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml';
@@ -16,16 +14,56 @@ const LOG4J_CONFIG_URL =
   'https://launcher.mojang.com/v1/objects/02937d122c86ce73319ef9975b58896fc1b491d1/log4j2_112-116.xml';
 const launcher = new Client();
 
-const MODPACK_DIR_NAME = 'modpack';
-const FORGE_DIR_NAME = 'forge';
-const VERSIONS_DIR_NAME = 'versions';
+function getBundledJavaPath(preferredMajors = [11]) {
+  const javaExecutable = process.platform === 'win32' ? 'javaw.exe' : 'java';
+  const envPath = process.env.BUNDLED_JAVA_PATH
+    ? path.resolve(process.env.BUNDLED_JAVA_PATH)
+    : null;
 
-function getInstallSubpaths(installDir) {
-  const modpackDir = path.join(installDir, MODPACK_DIR_NAME);
-  const forgeDir = path.join(installDir, FORGE_DIR_NAME);
-  const versionsDir = path.join(installDir, VERSIONS_DIR_NAME);
+  const runtimeRoots = preferredMajors.flatMap((major) => {
+    const folderName = major === 8 ? 'jre8' : `jre${major}`;
+    const devFolderName = process.platform === 'win32' ? `${folderName}-win64` : folderName;
 
-  return { modpackDir, forgeDir, versionsDir };
+    return [
+      process.resourcesPath ? path.join(process.resourcesPath, folderName) : null,
+      path.join(__dirname, '..', '..', devFolderName)
+    ];
+  });
+
+  const candidatePaths = [];
+
+  if (envPath) {
+    candidatePaths.push(envPath);
+    candidatePaths.push(path.join(envPath, 'bin', javaExecutable));
+    candidatePaths.push(
+      path.join(envPath, 'bin', process.platform === 'win32' ? 'java.exe' : 'java')
+    );
+  }
+
+  for (const runtimeRoot of runtimeRoots) {
+    if (!runtimeRoot) continue;
+    candidatePaths.push(path.join(runtimeRoot, 'bin', javaExecutable));
+    if (process.platform === 'win32') {
+      candidatePaths.push(path.join(runtimeRoot, 'bin', 'java.exe'));
+    }
+  }
+
+  for (const candidate of candidatePaths) {
+    if (!candidate || !fs.existsSync(candidate)) {
+      continue;
+    }
+
+    try {
+      const stats = fs.statSync(candidate);
+      if (stats.isFile()) {
+        return candidate;
+      }
+    } catch (error) {
+      // Ignore filesystem errors and continue to the next candidate.
+    }
+  }
+
+  return null;
 }
 
 let cachedForgeVersion = null;
@@ -114,28 +152,48 @@ async function detectJavaVersion(javaExecutable) {
 }
 
 async function ensureInstallDirExists(installDir) {
-  const { modpackDir, forgeDir, versionsDir } = getInstallSubpaths(installDir);
   await fsp.mkdir(installDir, { recursive: true });
-  await Promise.all([
-    fsp.mkdir(modpackDir, { recursive: true }),
-    fsp.mkdir(forgeDir, { recursive: true }),
-    fsp.mkdir(versionsDir, { recursive: true })
-  ]);
-
-  return { modpackDir, forgeDir, versionsDir };
 }
 
 function getForgeInstallerPath(installDir, forgeVersion) {
   if (!forgeVersion) return null;
 
-  const { forgeDir } = getInstallSubpaths(installDir);
-  return path.join(forgeDir, forgeVersion, `forge-${forgeVersion}-installer.jar`);
+  return path.join(installDir, 'forge', forgeVersion, `forge-${forgeVersion}-installer.jar`);
 }
 
 async function findGameDirectory(installDir) {
-  const { modpackDir } = getInstallSubpaths(installDir);
-  await fsp.mkdir(modpackDir, { recursive: true });
-  return modpackDir;
+  const modpackDir = path.join(installDir, 'modpack');
+  try {
+    await fsp.mkdir(modpackDir, { recursive: true });
+    return modpackDir;
+  } catch (error) {
+    // Fall back to the legacy detection logic below if we cannot create the modpack directory.
+    // This preserves compatibility for custom setups while still preferring the modpack path.
+  }
+
+  const entries = await fsp.readdir(installDir, { withFileTypes: true });
+  const hasModsAtRoot = entries.some(
+    (entry) => entry.isDirectory() && entry.name.toLowerCase() === 'mods'
+  );
+
+  if (hasModsAtRoot) {
+    return installDir;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const potentialDir = path.join(installDir, entry.name);
+    const subEntries = await fsp.readdir(potentialDir, { withFileTypes: true }).catch(() => []);
+    const hasMods = subEntries.some(
+      (subEntry) => subEntry.isDirectory() && subEntry.name.toLowerCase() === 'mods'
+    );
+
+    if (hasMods) {
+      return potentialDir;
+    }
+  }
+
+  throw new Error('Modpack files not found in the installation directory. Please reinstall.');
 }
 
 async function fetchLatestForgeVersion() {
@@ -187,8 +245,7 @@ async function downloadToFile(url, destinationPath, onStatus) {
 }
 
 async function ensureLog4jConfig(installDir, onStatus) {
-  const { modpackDir } = getInstallSubpaths(installDir);
-  const log4jPath = path.join(modpackDir, LOG4J_CONFIG_FILENAME);
+  const log4jPath = path.join(installDir, LOG4J_CONFIG_FILENAME);
   const exists = await fsp
     .stat(log4jPath)
     .then((stats) => stats.isFile())
@@ -199,15 +256,13 @@ async function ensureLog4jConfig(installDir, onStatus) {
   }
 
   onStatus?.({ message: 'Downloading Log4j configuration…' });
-  await fsp.mkdir(path.dirname(log4jPath), { recursive: true });
   await downloadToFile(LOG4J_CONFIG_URL, log4jPath, onStatus);
 
   return log4jPath;
 }
 
 async function ensureMinecraftVersion(installDir, minecraftVersion = DEFAULT_MC_VERSION, onStatus) {
-  const { versionsDir } = getInstallSubpaths(installDir);
-  const versionDir = path.join(versionsDir, minecraftVersion);
+  const versionDir = path.join(installDir, 'versions', minecraftVersion);
   const versionJsonPath = path.join(versionDir, `${minecraftVersion}.json`);
   const versionJarPath = path.join(versionDir, `${minecraftVersion}.jar`);
 
@@ -324,20 +379,55 @@ async function readDirSafe(targetPath, modpackErrors) {
   return entries;
 }
 
+async function findNestedModDirectories(installDir, modpackErrors) {
+  const modDirectories = [];
+  const installEntries = await fsp
+    .readdir(installDir, { withFileTypes: true })
+    .catch((error) => {
+      modpackErrors.push({ path: installDir, message: error.message, code: error.code });
+      return [];
+    });
+
+  for (const entry of installEntries) {
+    if (!entry.isDirectory()) continue;
+
+    const candidate = path.join(installDir, entry.name, 'mods');
+    const hasModsDirectory = await fsp
+      .stat(candidate)
+      .then((stats) => stats.isDirectory())
+      .catch(() => false);
+
+    if (hasModsDirectory) {
+      modDirectories.push(candidate);
+    }
+  }
+
+  return modDirectories;
+}
+
 async function checkLaunchRequirements(installDir, expectedModpackVersion = null) {
   const minecraftVersion = DEFAULT_MC_VERSION;
   const forgeVersion = await fetchLatestForgeVersion();
-  const { versionsDir, modpackDir } = getInstallSubpaths(installDir);
 
-  const minecraftPath = path.join(versionsDir, minecraftVersion, `${minecraftVersion}.json`);
+  const minecraftPath = path.join(
+    installDir,
+    'versions',
+    minecraftVersion,
+    `${minecraftVersion}.json`
+  );
   const modpackErrors = [];
-  const forgePath = forgeVersion ? path.join(versionsDir, forgeVersion, `${forgeVersion}.json`) : null;
+  const forgePath = forgeVersion
+    ? path.join(installDir, 'versions', forgeVersion, `${forgeVersion}.json`)
+    : null;
   const forgeInstallerPath = getForgeInstallerPath(installDir, forgeVersion);
-
+  const modpackDir = path.join(installDir, 'modpack');
   const modsPath = path.join(modpackDir, 'mods');
-  await fsp.mkdir(modpackDir, { recursive: true });
-  await fsp.mkdir(modsPath, { recursive: true });
-  const modDirectories = uniquePaths([modsPath]);
+  const fallbackModsPath = path.join(installDir, 'mods');
+  const modDirectories = uniquePaths([
+    modsPath,
+    fallbackModsPath,
+    ...(await findNestedModDirectories(installDir, modpackErrors))
+  ]);
 
   const minecraftPresent = await fsp
     .access(minecraftPath)
@@ -472,7 +562,9 @@ async function launchModpack({
     }
   }
 
-  const gameDirectory = INSTANCE_DIR;
+  const gameDirectory = await findGameDirectory(installDir).catch((error) => {
+    throw new Error(`Could not resolve modpack folder under ${installDir}: ${error.message}`);
+  });
   onStatus({ message: `Launching from ${gameDirectory}` });
 
   const auth = {
@@ -523,45 +615,68 @@ async function launchModpack({
     throw new Error(`Failed to prepare Log4j configuration: ${error.message}`);
   });
   const jvmArgs = buildJvmArgs(memorySettings, log4jConfigPath);
-  const javaExecutable = resolveBundledJava();
-  const { major: javaMajor, version: javaVersion } = await detectJavaVersion(javaExecutable);
+  // Forge 1.16.5 is most stable on Java 8, so prefer a bundled Java 8 runtime when available
+  // while still accepting Java 11 for environments that do not ship Java 8.
+  let javaPath = getBundledJavaPath([8, 11]);
+  if (!javaPath) {
+    onStatus({
+      message: 'Bundled Java runtime not found; falling back to system Java. Compatibility not guaranteed.',
+      level: 'warning'
+    });
+  }
+
+  let javaExecutable = javaPath || 'java';
+  let { major: javaMajor, version: javaVersion } = await detectJavaVersion(javaExecutable);
+
+  let javaCompatibilityWarning = null;
+  if (javaMajor === 11) {
+    const java8Fallback = getBundledJavaPath([8]);
+    if (java8Fallback) {
+      onStatus({
+        message: 'Detected Java 11; switching to bundled Java 8 for better Forge 1.16.5 compatibility.'
+      });
+      javaExecutable = java8Fallback;
+      javaPath = java8Fallback;
+      ({ major: javaMajor, version: javaVersion } = await detectJavaVersion(javaExecutable));
+    } else {
+      javaCompatibilityWarning =
+        'Java 11 detected without a bundled Java 8 runtime; continuing but Forge 1.16.5 may be unstable.';
+    }
+  }
+
+  if (javaExecutable && javaExecutable !== 'java') {
+    onStatus({ message: `Using bundled Java runtime at ${javaExecutable}` });
+  }
+  if (javaMajor && ![8, 11].includes(javaMajor)) {
+    throw new Error(
+      `Incompatible Java runtime detected (version ${javaVersion}). Forge 1.16.5 requires Java 8. ` +
+        'Please reinstall to include the bundled Java 8 runtime or configure a compatible Java path.'
+    );
+  }
+
+  if (javaCompatibilityWarning) {
+    onStatus({ message: javaCompatibilityWarning, level: 'warning' });
+  }
 
   if (!javaMajor) {
     onStatus({
       message: 'Unable to determine Java version; launching may fail. Please ensure Java 8 is configured.',
       level: 'warning'
     });
-  } else if (![8, 11].includes(javaMajor)) {
-    throw new Error(
-      `Incompatible Java runtime detected (version ${javaVersion}). Forge 1.16.5 requires Java 8. ` +
-        'Please reinstall to include the bundled Java 8 runtime or configure a compatible Java path.'
-    );
-  } else if (javaMajor === 11) {
-    onStatus({
-      message: 'Bundled Java 8 not found; using Java 11 fallback. Forge 1.16.5 compatibility may vary.',
-      level: 'warning'
-    });
-  }
-
-  if (!['java', 'javaw'].includes(javaExecutable)) {
-    onStatus({ message: `Using bundled Java runtime at ${javaExecutable}` });
   }
 
   const launchOptions = {
-    root: HELLAS_ROOT,
+    root: installDir,
     authorization: auth,
     gameDirectory,
     version: {
-      number: '1.16.5-forge-36.0.0',
+      number: DEFAULT_MC_VERSION,
       type: 'release'
     },
     forge: resolvedForgeInstaller,
-    memory: {
-      max: '96486M',
-      min: '48243M'
-    },
+    memory: calculateMemoryAllocation(memorySettings),
     customArgs: jvmArgs,
-    javaPath: ['java', 'javaw'].includes(javaExecutable) ? undefined : javaExecutable
+    javaPath: javaExecutable === 'java' ? undefined : javaExecutable
   };
 
   // Ensure JVM arguments are always a non-null array to satisfy ForgeWrapper expectations.
@@ -600,5 +715,6 @@ module.exports = {
   ensureBaseRuntime,
   ensureMinecraftVersion,
   buildMemoryPlan,
-  calculateMemoryAllocation
+  calculateMemoryAllocation,
+  getBundledJavaPath
 };
