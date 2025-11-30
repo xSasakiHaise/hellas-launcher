@@ -49,7 +49,7 @@ function Add-DefaultNodePath {
   # Try to add a standard Windows install location for Node.js to PATH if it's missing.
   # Returns $true if a path was added and $false otherwise.
   $defaultNodeDirs = @(
-    Join-Path $env:ProgramFiles "nodejs",
+    Join-Path $env:ProgramFiles "nodejs"
     Join-Path ${env:ProgramFiles(x86)} "nodejs"
   ) | Where-Object { $_ }
 
@@ -201,8 +201,8 @@ function Get-UnpackedResourcesDir {
   }
 
   $unpackedDir = Get-ChildItem -Path $DistRoot -Directory -Filter '*-unpacked' |
-    Sort-Object LastWriteTime -Descending |
-    Select-Object -First 1
+          Sort-Object LastWriteTime -Descending |
+          Select-Object -First 1
 
   if (-not $unpackedDir) {
     throw "Could not locate unpacked Electron app under $DistRoot. Check the electron-builder output path."
@@ -223,13 +223,66 @@ function Expand-JreArchive {
     [Parameter(Mandatory)][string]$Label
   )
 
+  # If the ZIP is missing, download the appropriate runtime into /build-deps/
   if (-not (Test-Path $ZipPath)) {
-    throw "Missing $ZipPath — place the $Label runtime ZIP into /build-deps/."
+    $zipDir = Split-Path $ZipPath -Parent
+    if (-not (Test-Path $zipDir)) {
+      New-Item -ItemType Directory -Force -Path $zipDir | Out-Null
+    }
+
+    $downloadUrl = $null
+    switch ($Label) {
+      'Java 8' {
+        # Temurin 8 JRE, Windows x64 zip
+        $downloadUrl = "https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u472-b08/OpenJDK8U-jre_x64_windows_hotspot_8u472b08.zip"
+      }
+      'Java 11' {
+        # Temurin 11 JRE, Windows x64 zip
+        $downloadUrl = "https://github.com/adoptium/temurin11-binaries/releases/download/jdk-11.0.24+8/OpenJDK11U-jre_x64_windows_hotspot_11.0.24_8.zip"
+      }
+    }
+
+    if (-not $downloadUrl) {
+      throw "Missing $ZipPath — and no download URL is configured for label '$Label'. Place the runtime ZIP into /build-deps/ or extend Expand-JreArchive."
+    }
+
+    Write-Host "Downloading $Label runtime for bundling..." -ForegroundColor Cyan
+    Invoke-WebRequest -Uri $downloadUrl -OutFile $ZipPath
   }
 
+  # Extract to a temp dir and then flatten into $Destination so that bin\javaw.exe is directly under it
+  $tempRoot   = Join-Path ([IO.Path]::GetTempPath()) ("hellas-launcher-" + $Label.ToLower().Replace(' ', '-') + "-bundle")
+  $extractDir = Join-Path $tempRoot "extracted"
+
+  if (Test-Path $tempRoot) {
+    Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+  }
+  New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
+
   Write-Host "Bundling $Label into $Destination ..." -ForegroundColor Cyan
+  Expand-Archive -Path $ZipPath -DestinationPath $extractDir -Force
+
+  $extractedRoot = Get-ChildItem -Directory -Path $extractDir | Select-Object -First 1
+  if (-not $extractedRoot) {
+    throw "Failed to extract $Label runtime from archive at $ZipPath."
+  }
+
+  if (Test-Path $Destination) {
+    Remove-Item $Destination -Recurse -Force -ErrorAction SilentlyContinue
+  }
   New-Item -ItemType Directory -Force -Path $Destination | Out-Null
-  Expand-Archive -Path $ZipPath -DestinationPath $Destination -Force
+
+  # Flatten one directory level so bin\javaw.exe ends up at $Destination\bin\javaw.exe
+  Move-Item -Path (Join-Path $extractedRoot.FullName '*') -Destination $Destination -Force
+
+  Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
+
+  $javawPath = Join-Path $Destination "bin/javaw.exe"
+  if (-not (Test-Path $javawPath)) {
+    Write-Warning "$Label runtime was extracted, but bin\javaw.exe was not found at $javawPath. Check the archive layout."
+  } else {
+    Write-Host "$Label runtime bundled into $Destination." -ForegroundColor Green
+  }
 }
 
 Write-Host "== Hellas Launcher Build ==" -ForegroundColor Cyan
