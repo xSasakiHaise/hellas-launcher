@@ -7,7 +7,7 @@ require('dotenv').config();
 
 const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall } = require('./update');
 const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
-const { launchModpack, cancelLaunch, isLaunching, checkLaunchRequirements } = require('./launcher');
+const { launchModpack, cancelLaunch, isLaunching, checkLaunchRequirements, ensureBaseRuntime } = require('./launcher');
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 let mainWindow;
@@ -16,6 +16,38 @@ let sessionAccount = { username: '', accessToken: '', refreshToken: '', uuid: ''
 let updateAbortController = null;
 let updateInProgress = false;
 let launchInProgress = false;
+const behaviorLog = [];
+let behaviorLogWritten = false;
+
+function recordBehavior(event, details = {}) {
+  behaviorLog.push({ timestamp: new Date().toISOString(), event, ...details });
+}
+
+function getBehaviorLogPath() {
+  const executableDir = path.dirname(app.getPath('exe'));
+  return path.join(executableDir, 'hellas-behavior.log');
+}
+
+function flushBehaviorLog() {
+  if (behaviorLogWritten || !behaviorLog.length) {
+    return;
+  }
+
+  const logPath = getBehaviorLogPath();
+  const header = `Hellas Launcher behavior log - ${new Date().toISOString()}`;
+  const lines = behaviorLog.map((entry) => {
+    const { timestamp, event, ...rest } = entry;
+    const data = Object.keys(rest).length ? ` ${JSON.stringify(rest)}` : '';
+    return `[${timestamp}] ${event}${data}`;
+  });
+
+  try {
+    fs.writeFileSync(logPath, [header, ...lines].join('\n'), 'utf8');
+    behaviorLogWritten = true;
+  } catch (error) {
+    console.warn('Failed to write behavior log', error);
+  }
+}
 
 function setUpdateInProgress(value) {
   updateInProgress = value;
@@ -116,6 +148,8 @@ async function getInstallationState() {
   let minecraftVersion = null;
   let detectedModpackVersion = null;
   let modpackErrors = [];
+  let searchedModDirectories = [];
+  let modpackDiagnostics = null;
   const expectedModpackVersion = store.get('lastKnownVersion') || store.get('installedVersion') || null;
 
   try {
@@ -125,6 +159,8 @@ async function getInstallationState() {
     minecraftVersion = check.minecraftVersion;
     detectedModpackVersion = check.modpackVersion || null;
     modpackErrors = check.modpackErrors || [];
+    searchedModDirectories = check.searchedModDirectories || [];
+    modpackDiagnostics = check.modpackDiagnostics || null;
   } catch (error) {
     console.warn('Unable to verify installation readiness', error);
   }
@@ -135,7 +171,8 @@ async function getInstallationState() {
     installedVersion ||
     detectedModpackVersion ||
     (requirements.modpack ? expectedModpackVersion : '') ||
-    lastKnownVersion;
+    lastKnownVersion ||
+    (requirements.modpack ? 'unversioned' : '');
 
   if (detectedModpackVersion && detectedModpackVersion !== installedVersion) {
     store.set('installedVersion', detectedModpackVersion);
@@ -151,6 +188,8 @@ async function getInstallationState() {
     installedVersion: resolvedInstalledVersion || installedVersion,
     lastKnownVersion,
     modpackErrors,
+    searchedModDirectories,
+    modpackDiagnostics,
     requirements,
     forgeVersion,
     minecraftVersion
@@ -158,18 +197,21 @@ async function getInstallationState() {
 }
 
 function sendUpdateProgress(payload) {
+  recordBehavior('update-progress', { payload });
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('hellas:update-progress', payload);
   }
 }
 
 function sendLaunchStatus(payload) {
+  recordBehavior('launch-status', { payload });
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('hellas:launch-status', payload);
   }
 }
 
   function sendInstallStatus(payload) {
+    recordBehavior('install-status', { payload });
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('hellas:install-status', payload);
     }
@@ -231,6 +273,7 @@ function createWindow() {
   mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
 
   mainWindow.on('close', (event) => {
+    recordBehavior('window-close-attempt', { updateInProgress });
     if (updateInProgress) {
       const choice = dialog.showMessageBoxSync(mainWindow, {
         type: 'question',
@@ -256,6 +299,7 @@ function createWindow() {
 }
 
 app.whenReady().then(async () => {
+  recordBehavior('app-ready', { version: app.getVersion(), platform: process.platform });
   createStore();
   await attemptRestoreAccount();
   createWindow();
@@ -268,9 +312,15 @@ app.whenReady().then(async () => {
 });
 
 app.on('window-all-closed', () => {
+  flushBehaviorLog();
   if (process.platform !== 'darwin') {
     app.quit();
   }
+});
+
+app.on('before-quit', () => {
+  recordBehavior('app-before-quit');
+  flushBehaviorLog();
 });
 
 ipcMain.handle('hellas:get-state', async () => {
@@ -361,6 +411,8 @@ ipcMain.handle('hellas:poll-device-login', async (_event, payload) => {
 
     await fs.promises.mkdir(dir, { recursive: true });
 
+    recordBehavior('install-start', { dir, updateSource: updateSource.url });
+
     sendInstallStatus({ message: `Preparing installation into ${dir}` });
     sendUpdateProgress({ state: 'downloading', progress: 0 });
     try {
@@ -378,12 +430,17 @@ ipcMain.handle('hellas:poll-device-login', async (_event, payload) => {
         store.set('lastKnownVersion', result.version);
       }
 
+      sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
+      await ensureBaseRuntime({ installDir: dir, onStatus: sendInstallStatus });
+
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Installation completed successfully.', level: 'success' });
+      recordBehavior('install-complete', { dir, version: result.version || null });
       return { installation: await getInstallationState(), version: result.version || null };
     } catch (error) {
       sendInstallStatus({ message: error.message || 'Installation failed.', level: 'error' });
       sendUpdateProgress({ state: 'error', message: error.message || 'Installation failed.' });
+      recordBehavior('install-error', { message: error.message });
       throw error;
     }
   });
@@ -436,11 +493,35 @@ ipcMain.handle('hellas:logout', async () => {
   const expectedModpackVersion =
     installation.lastKnownVersion || installation.installedVersion || null;
 
+  recordBehavior('launch-attempt', {
+    installDir,
+    expectedModpackVersion,
+    account: account.username
+  });
+
   if (!installation.isInstalled) {
     const modpackErrorDetails = (installation.modpackErrors || [])
       .map((error) => `${error.path}: ${error.message}${error.code ? ` (${error.code})` : ''}`)
       .join('; ');
-    const details = modpackErrorDetails ? ` Details: ${modpackErrorDetails}` : '';
+    const diagnostics = installation.modpackDiagnostics?.modDirectories || [];
+    const diagnosticSummary = diagnostics
+      .map((diag) => {
+        const existsPart = diag.exists ? 'exists' : 'missing';
+        const fileCount = Array.isArray(diag.entries) ? diag.entries.length : 0;
+        const errorPart = diag.error ? ` error: ${diag.error}` : '';
+        return `${diag.path} (${existsPart}, files: ${fileCount}${errorPart})`;
+      })
+      .join('; ');
+    const searchedDirs = installation.searchedModDirectories?.length
+      ? ` Searched mod directories: ${installation.searchedModDirectories.join(', ')}`
+      : '';
+    const details = modpackErrorDetails
+      ? ` Details: ${modpackErrorDetails}.${searchedDirs}`
+      : `${searchedDirs}${diagnosticSummary ? ` Diagnostics: ${diagnosticSummary}` : ''}`;
+    recordBehavior('launch-blocked', {
+      reason: 'missing-installation',
+      details
+    });
     sendLaunchStatus({
       message: `Launch blocked: install the modpack before starting.${details}`,
       level: 'error'
@@ -448,28 +529,41 @@ ipcMain.handle('hellas:logout', async () => {
     throw new Error(`Cannot launch until the modpack and dependencies are installed.${details}`);
   }
 
-    if (launchInProgress || isLaunching()) {
-      throw new Error('A launch is already running.');
-    }
+  if (launchInProgress || isLaunching()) {
+    throw new Error('A launch is already running.');
+  }
 
-    launchInProgress = true;
-    try {
-      sendLaunchStatus({ message: 'Starting Minecraft launch…' });
-      const { launchedWith } = await launchModpack({
-        installDir,
-        account,
-        onStatus: sendLaunchStatus,
-        expectedModpackVersion
-      });
-      sendLaunchStatus({ message: `Launch completed with Forge ${launchedWith}`, level: 'success' });
-      return { account: { username: account.username }, installDir, launchedWith };
-    } catch (error) {
-      sendLaunchStatus({ message: error.message || 'Failed to launch.', level: 'error' });
-      throw error;
-    } finally {
-      launchInProgress = false;
+  launchInProgress = true;
+  try {
+    const missing = Object.entries(installation.requirements || {})
+      .filter(([, present]) => !present)
+      .map(([key]) => key.toUpperCase());
+    recordBehavior('launch-start', {
+      installDir,
+      missing,
+      requirements: installation.requirements
+    });
+    if (missing.length) {
+      sendLaunchStatus({ message: `Resolving missing components: ${missing.join(', ')}` });
     }
-  });
+    sendLaunchStatus({ message: 'Starting Minecraft launch…' });
+    const { launchedWith } = await launchModpack({
+      installDir,
+      account,
+      onStatus: sendLaunchStatus,
+      expectedModpackVersion
+    });
+    sendLaunchStatus({ message: `Launch completed with Forge ${launchedWith}`, level: 'success' });
+    recordBehavior('launch-complete', { launchedWith, installDir });
+    return { account: { username: account.username }, installDir, launchedWith };
+  } catch (error) {
+    sendLaunchStatus({ message: error.message || 'Failed to launch.', level: 'error' });
+    recordBehavior('launch-error', { message: error.message });
+    throw error;
+  } finally {
+    launchInProgress = false;
+  }
+});
 
 ipcMain.handle('hellas:cancel-launch', async () => {
   launchInProgress = false;
@@ -483,6 +577,7 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       throw new Error('Update source is not configured.');
     }
 
+    recordBehavior('update-start', { updateSource: updateSource.url });
     sendInstallStatus({ message: 'Starting update…' });
     sendUpdateProgress({ state: 'downloading', progress: 0 });
     const installDir = getInstallDir();
@@ -501,12 +596,17 @@ ipcMain.handle('hellas:cancel-launch', async () => {
         store.set('lastKnownVersion', result.version);
       }
 
+      sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
+      await ensureBaseRuntime({ installDir: installDir, onStatus: sendInstallStatus });
+
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Update completed.', level: 'success' });
+      recordBehavior('update-complete', { installDir, version: result.version || null });
       return { installation: await getInstallationState(), version: result.version || null };
     } catch (error) {
       sendInstallStatus({ message: error.message || 'Update failed.', level: 'error' });
       sendUpdateProgress({ state: 'error', message: error.message || 'Update failed.' });
+      recordBehavior('update-error', { message: error.message });
       throw error;
     }
   });
@@ -518,6 +618,7 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       throw new Error('Update source is not configured.');
   }
 
+    recordBehavior('reinstall-start', { updateSource: updateSource.url });
     sendInstallStatus({ message: 'Starting fresh reinstall…' });
     sendUpdateProgress({ state: 'downloading', progress: 0 });
     const installDir = getInstallDir();
@@ -534,12 +635,17 @@ ipcMain.handle('hellas:cancel-launch', async () => {
         store.set('lastKnownVersion', result.version);
       }
 
+      sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
+      await ensureBaseRuntime({ installDir: installDir, onStatus: sendInstallStatus });
+
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Reinstall finished.', level: 'success' });
+      recordBehavior('reinstall-complete', { installDir, version: result.version || null });
       return { installation: await getInstallationState(), version: result.version || null };
     } catch (error) {
       sendInstallStatus({ message: error.message || 'Reinstall failed.', level: 'error' });
       sendUpdateProgress({ state: 'error', message: error.message || 'Reinstall failed.' });
+      recordBehavior('reinstall-error', { message: error.message });
       throw error;
     }
   });
