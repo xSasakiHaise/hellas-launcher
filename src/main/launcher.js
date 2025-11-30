@@ -547,22 +547,37 @@ async function launchModpack({
     onStatus({ message: `Using bundled Java runtime at ${javaExecutable}` });
   }
 
-  const launchOptions = {
-    root: HELLAS_ROOT,
-    authorization: auth,
-    gameDirectory,
-    version: {
-      number: '1.16.5-forge-36.0.0',
-      type: 'release'
-    },
-    forge: resolvedForgeInstaller,
-    memory: {
-      max: '96486M',
-      min: '48243M'
-    },
-    customArgs: jvmArgs,
-    javaPath: ['java', 'javaw'].includes(javaExecutable) ? undefined : javaExecutable
-  };
+const launchOptions = {
+  root: HELLAS_ROOT,
+  authorization: auth,
+  gameDirectory,
+
+  version: {
+    // vanilla ID that exists in Mojang's manifest
+    number: '1.16.5',
+    type: 'release',
+
+    // name of your Forge profile folder under versions/
+    // e.g. <gameDirectory>/versions/1.16.5-forge-36.2.42/...
+    custom: '1.16.5-forge-36.2.42',
+  },
+
+  // keep using your resolved Forge installer / path
+  forge: resolvedForgeInstaller,
+
+  memory: {
+    max: '96486M',
+    min: '48243M',
+  },
+
+  customArgs: jvmArgs,
+
+  // if javaExecutable is literally "java" or "javaw", let MCLC resolve it,
+  // otherwise pass the full path (your bundled JRE8/11)
+  javaPath: ['java', 'javaw'].includes(javaExecutable)
+    ? undefined
+    : javaExecutable,
+};
 
   // Ensure JVM arguments are always a non-null array to satisfy ForgeWrapper expectations.
   if (!Array.isArray(launchOptions.customArgs)) {

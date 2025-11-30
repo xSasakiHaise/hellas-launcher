@@ -250,7 +250,7 @@ function Expand-JreArchive {
     Invoke-WebRequest -Uri $downloadUrl -OutFile $ZipPath
   }
 
-  # Extract to a temp dir and then flatten into $Destination so that bin\javaw.exe is directly under it
+  # Extract to a temp dir
   $tempRoot   = Join-Path ([IO.Path]::GetTempPath()) ("hellas-launcher-" + $Label.ToLower().Replace(' ', '-') + "-bundle")
   $extractDir = Join-Path $tempRoot "extracted"
 
@@ -262,18 +262,23 @@ function Expand-JreArchive {
   Write-Host "Bundling $Label into $Destination ..." -ForegroundColor Cyan
   Expand-Archive -Path $ZipPath -DestinationPath $extractDir -Force
 
-  $extractedRoot = Get-ChildItem -Directory -Path $extractDir | Select-Object -First 1
-  if (-not $extractedRoot) {
-    throw "Failed to extract $Label runtime from archive at $ZipPath."
+  # Find the directory that actually contains bin\javaw.exe
+  $javaw = Get-ChildItem -Path $extractDir -Recurse -Filter "javaw.exe" -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $javaw) {
+    throw "$Label runtime archive did not contain javaw.exe (looked under $extractDir)."
   }
+
+  # javaw.exe is typically at <JAVA_HOME>\bin\javaw.exe
+  $binDir    = Split-Path $javaw.FullName -Parent
+  $javaHome  = Split-Path $binDir -Parent
 
   if (Test-Path $Destination) {
     Remove-Item $Destination -Recurse -Force -ErrorAction SilentlyContinue
   }
   New-Item -ItemType Directory -Force -Path $Destination | Out-Null
 
-  # Flatten one directory level so bin\javaw.exe ends up at $Destination\bin\javaw.exe
-  Move-Item -Path (Join-Path $extractedRoot.FullName '*') -Destination $Destination -Force
+  # Move the full Java home content (so we end up with Destination\bin\javaw.exe etc.)
+  Move-Item -Path (Join-Path $javaHome '*') -Destination $Destination -Force
 
   Remove-Item $tempRoot -Recurse -Force -ErrorAction SilentlyContinue
 
@@ -314,14 +319,14 @@ npm run build
 if ($LASTEXITCODE -ne 0) { throw "Build failed." }
 
 try {
-  $repoRoot = Split-Path $MyInvocation.MyCommand.Path -Parent
-  $distDir = Join-Path $repoRoot "dist"
+  $repoRoot   = Split-Path $MyInvocation.MyCommand.Path -Parent
+  $distDir    = Join-Path $repoRoot "dist"
   $resourcesDir = Get-UnpackedResourcesDir -DistRoot $distDir
 
-  $jre8Zip = Join-Path $repoRoot "build-deps\jre8-win-x64.zip"
+  $jre8Zip  = Join-Path $repoRoot "build-deps\jre8-win-x64.zip"
   $jre11Zip = Join-Path $repoRoot "build-deps\jre11-win-x64.zip"
 
-  $jre8Dir = Join-Path $resourcesDir "jre8"
+  $jre8Dir  = Join-Path $resourcesDir "jre8"
   $jre11Dir = Join-Path $resourcesDir "jre11"
 
   if (-not (Test-Path (Join-Path $jre8Dir "bin/javaw.exe"))) {
