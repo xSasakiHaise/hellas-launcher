@@ -166,19 +166,35 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
     }
 
     const contentType = response.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      const manifest = await response.json();
-      const pack = manifest.modpack || manifest;
-      if (!pack?.url) {
-        throw new Error('Update descriptor missing the modpack URL.');
-      }
-      resolved.url = pack.url;
-      resolved.version = pack.version || resolved.version || null;
-      resolved.sha256 = pack.sha256 || pack.hash || resolved.sha256 || null;
+    const contentLength = Number(response.headers.get('content-length') || 0);
+    const shouldAttemptDescriptor =
+      contentType.includes('application/json') ||
+      resolved.url.toLowerCase().endsWith('.json') ||
+      (contentLength > 0 && contentLength <= 512 * 1024);
 
-      response = await fetch(resolved.url, { signal: abortSignal });
-      if (!response.ok) {
-        throw new Error(`Failed to download update archive (${response.status})`);
+    if (shouldAttemptDescriptor) {
+      try {
+        const manifest = await response.clone().json();
+        const pack = manifest.modpack || manifest;
+        if (!pack?.url) {
+          throw new Error('Update descriptor missing the modpack URL.');
+        }
+        resolved.url = pack.url;
+        resolved.version = pack.version || resolved.version || null;
+        resolved.sha256 = pack.sha256 || pack.hash || resolved.sha256 || null;
+
+        if (response.body?.cancel) {
+          response.body.cancel();
+        }
+
+        response = await fetch(resolved.url, { signal: abortSignal });
+        if (!response.ok) {
+          throw new Error(`Failed to download update archive (${response.status})`);
+        }
+      } catch (descriptorError) {
+        if (shouldAttemptDescriptor && contentType.includes('application/json')) {
+          throw descriptorError;
+        }
       }
     }
 
