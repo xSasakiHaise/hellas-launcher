@@ -2,6 +2,7 @@ const fetch = require('node-fetch');
 const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
+const { execFile } = require('child_process');
 const { Client } = require('minecraft-launcher-core');
 const os = require('os');
 
@@ -89,6 +90,27 @@ function buildJvmArgs(memorySettings = {}) {
     : [];
 
   return [...defaultJvmArgs, ...userJvmArgs];
+}
+
+function parseJavaVersion(output = '') {
+  const match = output.match(/"(?<version>[\d+_.]+)"/);
+  const version = match?.groups?.version?.replace(/_/g, '.');
+  const major = version ? Number(version.split('.')[0]) : null;
+
+  return { version: version ?? null, major: Number.isFinite(major) ? major : null };
+}
+
+async function detectJavaVersion(javaExecutable) {
+  return new Promise((resolve) => {
+    execFile(javaExecutable, ['-version'], (error, _stdout, stderr) => {
+      if (error) {
+        resolve({ version: null, major: null });
+        return;
+      }
+
+      resolve(parseJavaVersion(stderr || ''));
+    });
+  });
 }
 
 async function ensureInstallDirExists(installDir) {
@@ -542,6 +564,15 @@ async function launchModpack({
     });
   }
 
+  const javaExecutable = javaPath || 'java';
+  const { major: javaMajor, version: javaVersion } = await detectJavaVersion(javaExecutable);
+  if (javaMajor && javaMajor >= 17) {
+    throw new Error(
+      `Incompatible Java runtime detected (version ${javaVersion}). Forge 1.16.5 requires Java 8 or 11. ` +
+        'Please reinstall to include the bundled Java 11 runtime or configure a compatible Java path.'
+    );
+  }
+
   const launchOptions = {
     root: installDir,
     authorization: auth,
@@ -552,17 +583,13 @@ async function launchModpack({
     },
     forge: resolvedForgeInstaller,
     memory: calculateMemoryAllocation(memorySettings),
-    jvmArgs,
+    customArgs: jvmArgs,
     javaPath: javaPath || undefined
   };
 
   // Ensure JVM arguments are always a non-null array to satisfy ForgeWrapper expectations.
-  if (!Array.isArray(launchOptions.jvmArgs)) {
-    launchOptions.jvmArgs = [];
-  }
-
-  if (launchOptions.versionData?.arguments && !Array.isArray(launchOptions.versionData.arguments.jvm)) {
-    launchOptions.versionData.arguments.jvm = [];
+  if (!Array.isArray(launchOptions.customArgs)) {
+    launchOptions.customArgs = [];
   }
 
   launcher.launch(launchOptions);
