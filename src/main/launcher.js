@@ -128,7 +128,11 @@ function buildJvmArgs(memorySettings = {}, logConfigPath = LOG4J_CONFIG_FILENAME
 function parseJavaVersion(output = '') {
   const match = output.match(/"(?<version>[\d+_.]+)"/);
   const version = match?.groups?.version?.replace(/_/g, '.');
-  const major = version ? Number(version.split('.')[0]) : null;
+  const versionParts = version ? version.split('.') : [];
+  // Java 8 reports versions like "1.8.0_402" where the leading "1" is not the
+  // actual major version. For Java 9+ the first segment already represents the
+  // major version (e.g., "11.0.24").
+  const major = versionParts[0] === '1' ? Number(versionParts[1]) : Number(versionParts[0]);
 
   return { version: version ?? null, major: Number.isFinite(major) ? major : null };
 }
@@ -624,6 +628,7 @@ async function launchModpack({
   let javaExecutable = javaPath || 'java';
   let { major: javaMajor, version: javaVersion } = await detectJavaVersion(javaExecutable);
 
+  let javaCompatibilityWarning = null;
   if (javaMajor === 11) {
     const java8Fallback = getBundledJavaPath([8]);
     if (java8Fallback) {
@@ -633,17 +638,24 @@ async function launchModpack({
       javaExecutable = java8Fallback;
       javaPath = java8Fallback;
       ({ major: javaMajor, version: javaVersion } = await detectJavaVersion(javaExecutable));
+    } else {
+      javaCompatibilityWarning =
+        'Java 11 detected without a bundled Java 8 runtime; continuing but Forge 1.16.5 may be unstable.';
     }
   }
 
   if (javaExecutable && javaExecutable !== 'java') {
     onStatus({ message: `Using bundled Java runtime at ${javaExecutable}` });
   }
-  if (javaMajor && javaMajor !== 8) {
+  if (javaMajor && ![8, 11].includes(javaMajor)) {
     throw new Error(
       `Incompatible Java runtime detected (version ${javaVersion}). Forge 1.16.5 requires Java 8. ` +
         'Please reinstall to include the bundled Java 8 runtime or configure a compatible Java path.'
     );
+  }
+
+  if (javaCompatibilityWarning) {
+    onStatus({ message: javaCompatibilityWarning, level: 'warning' });
   }
 
   if (!javaMajor) {
