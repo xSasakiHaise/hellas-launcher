@@ -7,7 +7,7 @@ require('dotenv').config();
 
 const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall } = require('./update');
 const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
-const { launchModpack, cancelLaunch, isLaunching, checkLaunchRequirements } = require('./launcher');
+const { launchModpack, cancelLaunch, isLaunching, checkLaunchRequirements, ensureBaseRuntime } = require('./launcher');
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 let mainWindow;
@@ -116,6 +116,7 @@ async function getInstallationState() {
   let minecraftVersion = null;
   let detectedModpackVersion = null;
   let modpackErrors = [];
+  let searchedModDirectories = [];
   const expectedModpackVersion = store.get('lastKnownVersion') || store.get('installedVersion') || null;
 
   try {
@@ -125,6 +126,7 @@ async function getInstallationState() {
     minecraftVersion = check.minecraftVersion;
     detectedModpackVersion = check.modpackVersion || null;
     modpackErrors = check.modpackErrors || [];
+    searchedModDirectories = check.searchedModDirectories || [];
   } catch (error) {
     console.warn('Unable to verify installation readiness', error);
   }
@@ -135,7 +137,8 @@ async function getInstallationState() {
     installedVersion ||
     detectedModpackVersion ||
     (requirements.modpack ? expectedModpackVersion : '') ||
-    lastKnownVersion;
+    lastKnownVersion ||
+    (requirements.modpack ? 'unversioned' : '');
 
   if (detectedModpackVersion && detectedModpackVersion !== installedVersion) {
     store.set('installedVersion', detectedModpackVersion);
@@ -151,6 +154,7 @@ async function getInstallationState() {
     installedVersion: resolvedInstalledVersion || installedVersion,
     lastKnownVersion,
     modpackErrors,
+    searchedModDirectories,
     requirements,
     forgeVersion,
     minecraftVersion
@@ -378,6 +382,9 @@ ipcMain.handle('hellas:poll-device-login', async (_event, payload) => {
         store.set('lastKnownVersion', result.version);
       }
 
+      sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
+      await ensureBaseRuntime({ installDir: dir, onStatus: sendInstallStatus });
+
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Installation completed successfully.', level: 'success' });
       return { installation: await getInstallationState(), version: result.version || null };
@@ -440,7 +447,10 @@ ipcMain.handle('hellas:logout', async () => {
     const modpackErrorDetails = (installation.modpackErrors || [])
       .map((error) => `${error.path}: ${error.message}${error.code ? ` (${error.code})` : ''}`)
       .join('; ');
-    const details = modpackErrorDetails ? ` Details: ${modpackErrorDetails}` : '';
+    const searchedDirs = installation.searchedModDirectories?.length
+      ? ` Searched mod directories: ${installation.searchedModDirectories.join(', ')}`
+      : '';
+    const details = modpackErrorDetails ? ` Details: ${modpackErrorDetails}.${searchedDirs}` : searchedDirs;
     sendLaunchStatus({
       message: `Launch blocked: install the modpack before starting.${details}`,
       level: 'error'
@@ -448,28 +458,34 @@ ipcMain.handle('hellas:logout', async () => {
     throw new Error(`Cannot launch until the modpack and dependencies are installed.${details}`);
   }
 
-    if (launchInProgress || isLaunching()) {
-      throw new Error('A launch is already running.');
-    }
+  if (launchInProgress || isLaunching()) {
+    throw new Error('A launch is already running.');
+  }
 
-    launchInProgress = true;
-    try {
-      sendLaunchStatus({ message: 'Starting Minecraft launch…' });
-      const { launchedWith } = await launchModpack({
-        installDir,
-        account,
-        onStatus: sendLaunchStatus,
-        expectedModpackVersion
-      });
-      sendLaunchStatus({ message: `Launch completed with Forge ${launchedWith}`, level: 'success' });
-      return { account: { username: account.username }, installDir, launchedWith };
-    } catch (error) {
-      sendLaunchStatus({ message: error.message || 'Failed to launch.', level: 'error' });
-      throw error;
-    } finally {
-      launchInProgress = false;
+  launchInProgress = true;
+  try {
+    const missing = Object.entries(installation.requirements || {})
+      .filter(([, present]) => !present)
+      .map(([key]) => key.toUpperCase());
+    if (missing.length) {
+      sendLaunchStatus({ message: `Resolving missing components: ${missing.join(', ')}` });
     }
-  });
+    sendLaunchStatus({ message: 'Starting Minecraft launch…' });
+    const { launchedWith } = await launchModpack({
+      installDir,
+      account,
+      onStatus: sendLaunchStatus,
+      expectedModpackVersion
+    });
+    sendLaunchStatus({ message: `Launch completed with Forge ${launchedWith}`, level: 'success' });
+    return { account: { username: account.username }, installDir, launchedWith };
+  } catch (error) {
+    sendLaunchStatus({ message: error.message || 'Failed to launch.', level: 'error' });
+    throw error;
+  } finally {
+    launchInProgress = false;
+  }
+});
 
 ipcMain.handle('hellas:cancel-launch', async () => {
   launchInProgress = false;
@@ -500,6 +516,9 @@ ipcMain.handle('hellas:cancel-launch', async () => {
         store.set('installedVersion', result.version);
         store.set('lastKnownVersion', result.version);
       }
+
+      sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
+      await ensureBaseRuntime({ installDir: installDir, onStatus: sendInstallStatus });
 
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Update completed.', level: 'success' });
@@ -533,6 +552,9 @@ ipcMain.handle('hellas:cancel-launch', async () => {
         store.set('installedVersion', result.version);
         store.set('lastKnownVersion', result.version);
       }
+
+      sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
+      await ensureBaseRuntime({ installDir: installDir, onStatus: sendInstallStatus });
 
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Reinstall finished.', level: 'success' });
