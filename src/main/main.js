@@ -8,6 +8,7 @@ require('dotenv').config();
 const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall } = require('./update');
 const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
 const { launchModpack, cancelLaunch, isLaunching, checkLaunchRequirements, ensureBaseRuntime } = require('./launcher');
+const { initLogger, logMessage, getLauncherLogPath, readLauncherLog } = require('./logger');
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 let mainWindow;
@@ -16,11 +17,13 @@ let sessionAccount = { username: '', accessToken: '', refreshToken: '', uuid: ''
 let updateAbortController = null;
 let updateInProgress = false;
 let launchInProgress = false;
+let logWindow;
 const behaviorLog = [];
 let behaviorLogWritten = false;
 
 function recordBehavior(event, details = {}) {
   behaviorLog.push({ timestamp: new Date().toISOString(), event, ...details });
+  logMessage('info', `behavior:${event}`, details);
 }
 
 function getBehaviorLogPath() {
@@ -135,6 +138,7 @@ async function attemptRestoreAccount() {
     await setSession(session);
   } catch (error) {
     console.warn('Stored login could not be refreshed', error);
+    logMessage('error', 'Stored login refresh failed', { error: error.message });
     clearSessionAccount();
     store.set('account', { username: '', refreshToken: '' });
   }
@@ -161,6 +165,7 @@ async function getInstallationState() {
     searchedModDirectories = check.searchedModDirectories || [];
   } catch (error) {
     console.warn('Unable to verify installation readiness', error);
+    logMessage('error', 'Installation readiness check failed', { error: error.message });
   }
 
   const installedVersion = store.get('installedVersion') || '';
@@ -195,6 +200,7 @@ async function getInstallationState() {
 
 function sendUpdateProgress(payload) {
   recordBehavior('update-progress', { payload });
+  logMessage('debug', 'Update progress event', payload);
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('hellas:update-progress', payload);
   }
@@ -202,6 +208,7 @@ function sendUpdateProgress(payload) {
 
 function sendLaunchStatus(payload) {
   recordBehavior('launch-status', { payload });
+  logMessage('debug', 'Launch status event', payload);
   if (mainWindow && !mainWindow.isDestroyed()) {
     mainWindow.webContents.send('hellas:launch-status', payload);
   }
@@ -209,6 +216,7 @@ function sendLaunchStatus(payload) {
 
   function sendInstallStatus(payload) {
     recordBehavior('install-status', { payload });
+    logMessage('debug', 'Install status event', payload);
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send('hellas:install-status', payload);
     }
@@ -295,7 +303,35 @@ function createWindow() {
   }
 }
 
+function createLogWindow() {
+  if (logWindow && !logWindow.isDestroyed()) {
+    logWindow.focus();
+    return logWindow;
+  }
+
+  logWindow = new BrowserWindow({
+    width: 900,
+    height: 600,
+    title: 'Hellas Launcher Logs',
+    webPreferences: {
+      preload: path.join(__dirname, '../preload/preload.js'),
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: false
+    }
+  });
+
+  logWindow.setMenuBarVisibility(false);
+  logWindow.on('closed', () => {
+    logWindow = null;
+  });
+
+  logWindow.loadFile(path.join(__dirname, '../renderer/logs.html'));
+  return logWindow;
+}
+
 app.whenReady().then(async () => {
+  initLogger(app);
   recordBehavior('app-ready', { version: app.getVersion(), platform: process.platform });
   createStore();
   await attemptRestoreAccount();
@@ -438,6 +474,7 @@ ipcMain.handle('hellas:poll-device-login', async (_event, payload) => {
       sendInstallStatus({ message: error.message || 'Installation failed.', level: 'error' });
       sendUpdateProgress({ state: 'error', message: error.message || 'Installation failed.' });
       recordBehavior('install-error', { message: error.message });
+      logMessage('error', 'Installation failed', { message: error.message });
       throw error;
     }
   });
@@ -531,9 +568,11 @@ ipcMain.handle('hellas:logout', async () => {
       expectedModpackVersion
     });
     sendLaunchStatus({ message: `Launch completed with Forge ${launchedWith}`, level: 'success' });
+    logMessage('info', 'Launch completed', { launchedWith });
     return { account: { username: account.username }, installDir, launchedWith };
   } catch (error) {
     sendLaunchStatus({ message: error.message || 'Failed to launch.', level: 'error' });
+    logMessage('error', 'Launch failed', { error: error.message });
     throw error;
   } finally {
     launchInProgress = false;
@@ -582,6 +621,7 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       sendInstallStatus({ message: error.message || 'Update failed.', level: 'error' });
       sendUpdateProgress({ state: 'error', message: error.message || 'Update failed.' });
       recordBehavior('update-error', { message: error.message });
+      logMessage('error', 'Update failed', { message: error.message });
       throw error;
     }
   });
@@ -621,6 +661,7 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       sendInstallStatus({ message: error.message || 'Reinstall failed.', level: 'error' });
       sendUpdateProgress({ state: 'error', message: error.message || 'Reinstall failed.' });
       recordBehavior('reinstall-error', { message: error.message });
+      logMessage('error', 'Reinstall failed', { message: error.message });
       throw error;
     }
   });
@@ -633,3 +674,14 @@ ipcMain.handle('hellas:update-known-version', async (_event, version) => {
   }
   return store.get('lastKnownVersion');
 });
+
+ipcMain.handle('hellas:open-log-window', async () => {
+  const window = createLogWindow();
+  return { opened: Boolean(window), path: getLauncherLogPath() };
+});
+
+ipcMain.handle('hellas:get-launcher-log', async () => readLauncherLog());
+
+ipcMain.handle('hellas:get-log-info', async () => ({
+  launcherLogPath: getLauncherLogPath()
+}));

@@ -629,6 +629,15 @@ dropdownActions.forEach((button) => {
           await window.hellas.setAnimationEnabled(launcherState.animationEnabled);
           applyAnimationState();
           break;
+        case 'open-logs': {
+          try {
+            await window.hellas.openLogWindow();
+          } catch (error) {
+            console.error('Failed to open log window', error);
+            appendLaunchLog('Unable to open log window. Check debug.txt for details.', 'error');
+          }
+          break;
+        }
         case 'reinstall': {
           setUpdating(true);
           updateProgressText.textContent = 'Reinstalling…';
