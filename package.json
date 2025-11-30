@@ -36,6 +36,10 @@
       {
         "from": "jre11-win64",
         "to": "jre11"
+      },
+      {
+        "from": "jre8-win64",
+        "to": "jre8"
       }
     ],
     "win": {

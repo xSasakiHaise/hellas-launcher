@@ -14,13 +14,21 @@ const LOG4J_CONFIG_URL =
   'https://launcher.mojang.com/v1/objects/02937d122c86ce73319ef9975b58896fc1b491d1/log4j2_112-116.xml';
 const launcher = new Client();
 
-function getBundledJavaPath() {
+function getBundledJavaPath(preferredMajors = [11]) {
   const javaExecutable = process.platform === 'win32' ? 'javaw.exe' : 'java';
   const envPath = process.env.BUNDLED_JAVA_PATH
     ? path.resolve(process.env.BUNDLED_JAVA_PATH)
     : null;
-  const resourcesJre = process.resourcesPath ? path.join(process.resourcesPath, 'jre11') : null;
-  const devJre = path.join(__dirname, '..', '..', 'jre11-win64');
+
+  const runtimeRoots = preferredMajors.flatMap((major) => {
+    const folderName = major === 8 ? 'jre8' : `jre${major}`;
+    const devFolderName = process.platform === 'win32' ? `${folderName}-win64` : folderName;
+
+    return [
+      process.resourcesPath ? path.join(process.resourcesPath, folderName) : null,
+      path.join(__dirname, '..', '..', devFolderName)
+    ];
+  });
 
   const candidatePaths = [];
 
@@ -32,10 +40,13 @@ function getBundledJavaPath() {
     );
   }
 
-  if (resourcesJre) {
-    candidatePaths.push(path.join(resourcesJre, 'bin', javaExecutable));
+  for (const runtimeRoot of runtimeRoots) {
+    if (!runtimeRoot) continue;
+    candidatePaths.push(path.join(runtimeRoot, 'bin', javaExecutable));
+    if (process.platform === 'win32') {
+      candidatePaths.push(path.join(runtimeRoot, 'bin', 'java.exe'));
+    }
   }
-  candidatePaths.push(path.join(devJre, 'bin', javaExecutable));
 
   for (const candidate of candidatePaths) {
     if (!candidate || !fs.existsSync(candidate)) {
@@ -49,13 +60,6 @@ function getBundledJavaPath() {
       }
     } catch (error) {
       // Ignore filesystem errors and continue to the next candidate.
-    }
-  }
-
-  if (resourcesJre) {
-    const fallback = path.join(resourcesJre, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
-    if (fs.existsSync(fallback)) {
-      return fallback;
     }
   }
 
@@ -607,30 +611,44 @@ async function launchModpack({
     throw new Error(`Failed to prepare Log4j configuration: ${error.message}`);
   });
   const jvmArgs = buildJvmArgs(memorySettings, log4jConfigPath);
-  const javaPath = getBundledJavaPath();
+  // Forge 1.16.5 is most stable on Java 8, so prefer a bundled Java 8 runtime when available
+  // while still accepting Java 11 for environments that do not ship Java 8.
+  let javaPath = getBundledJavaPath([8, 11]);
   if (!javaPath) {
     onStatus({
-      message: 'Bundled Java 11 runtime not found; falling back to system Java. Compatibility not guaranteed.',
+      message: 'Bundled Java runtime not found; falling back to system Java. Compatibility not guaranteed.',
       level: 'warning'
     });
   }
 
-  const javaExecutable = javaPath || 'java';
-  const { major: javaMajor, version: javaVersion } = await detectJavaVersion(javaExecutable);
-  if (javaPath) {
-    onStatus({ message: `Using bundled Java runtime at ${javaPath}` });
+  let javaExecutable = javaPath || 'java';
+  let { major: javaMajor, version: javaVersion } = await detectJavaVersion(javaExecutable);
+
+  if (javaMajor === 11) {
+    const java8Fallback = getBundledJavaPath([8]);
+    if (java8Fallback) {
+      onStatus({
+        message: 'Detected Java 11; switching to bundled Java 8 for better Forge 1.16.5 compatibility.'
+      });
+      javaExecutable = java8Fallback;
+      javaPath = java8Fallback;
+      ({ major: javaMajor, version: javaVersion } = await detectJavaVersion(javaExecutable));
+    }
   }
-  if (javaMajor && ![8, 11].includes(javaMajor)) {
+
+  if (javaExecutable && javaExecutable !== 'java') {
+    onStatus({ message: `Using bundled Java runtime at ${javaExecutable}` });
+  }
+  if (javaMajor && javaMajor !== 8) {
     throw new Error(
-      `Incompatible Java runtime detected (version ${javaVersion}). Forge 1.16.5 requires Java 8 or 11. ` +
-        'Please reinstall to include the bundled Java 11 runtime or configure a compatible Java path.'
+      `Incompatible Java runtime detected (version ${javaVersion}). Forge 1.16.5 requires Java 8. ` +
+        'Please reinstall to include the bundled Java 8 runtime or configure a compatible Java path.'
     );
   }
 
   if (!javaMajor) {
     onStatus({
-      message:
-        'Unable to determine Java version; launching may fail. Please ensure Java 8 or 11 is configured.',
+      message: 'Unable to determine Java version; launching may fail. Please ensure Java 8 is configured.',
       level: 'warning'
     });
   }
@@ -646,7 +664,7 @@ async function launchModpack({
     forge: resolvedForgeInstaller,
     memory: calculateMemoryAllocation(memorySettings),
     customArgs: jvmArgs,
-    javaPath: javaPath || undefined
+    javaPath: javaExecutable === 'java' ? undefined : javaExecutable
   };
 
   // Ensure JVM arguments are always a non-null array to satisfy ForgeWrapper expectations.
