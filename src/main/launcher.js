@@ -3,6 +3,7 @@ const path = require('path');
 const fs = require('fs');
 const fsp = fs.promises;
 const { Client } = require('minecraft-launcher-core');
+const os = require('os');
 
 const DEFAULT_MC_VERSION = '1.16.5';
 const FORGE_METADATA_URL = 'https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml';
@@ -11,6 +12,44 @@ const launcher = new Client();
 
 let cachedForgeVersion = null;
 let activeLaunch = null;
+
+function normalizeMemoryValue(value) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return null;
+  }
+
+  return Math.round(parsed);
+}
+
+function buildMemoryPlan(memorySettings = {}) {
+  const totalMemoryMb = Math.floor(os.totalmem() / (1024 * 1024));
+  const recommendedMb = Math.max(1024, Math.floor(totalMemoryMb * 0.75));
+
+  const envMax = normalizeMemoryValue(process.env.MC_MEMORY_MAX);
+  const envMin = normalizeMemoryValue(process.env.MC_MEMORY_MIN);
+
+  const mode = memorySettings.mode === 'custom' ? 'custom' : 'auto';
+  const customMax = normalizeMemoryValue(memorySettings.maxMb);
+  const customMin = normalizeMemoryValue(memorySettings.minMb);
+
+  let maxMb = envMax ?? (mode === 'custom' ? customMax : null) ?? recommendedMb;
+  maxMb = Math.min(totalMemoryMb, Math.max(1024, maxMb));
+
+  let minMb = envMin ?? (mode === 'custom' ? customMin : null) ?? Math.floor(maxMb / 2);
+  minMb = Math.min(maxMb, Math.max(1024, minMb));
+
+  return { totalMemoryMb, recommendedMb, minMb, maxMb };
+}
+
+function calculateMemoryAllocation(memorySettings = {}) {
+  const plan = buildMemoryPlan(memorySettings);
+
+  return {
+    max: `${plan.maxMb}`,
+    min: `${plan.minMb}`
+  };
+}
 
 async function ensureInstallDirExists(installDir) {
   await fsp.mkdir(installDir, { recursive: true });
@@ -347,7 +386,8 @@ async function launchModpack({
   installDir,
   account,
   onStatus = () => {},
-  expectedModpackVersion = null
+  expectedModpackVersion = null,
+  memorySettings = {}
 }) {
   if (!installDir) {
     throw new Error('Install directory is missing. Please install the modpack first.');
@@ -453,7 +493,7 @@ async function launchModpack({
   });
 
   onStatus({ message: `Launching with Forge ${forgeVersion}` });
-  launcher.launch({
+  const launchOptions = {
     root: installDir,
     authorization: auth,
     gameDirectory,
@@ -462,11 +502,19 @@ async function launchModpack({
       type: 'release'
     },
     forge: resolvedForgeInstaller,
-    memory: {
-      max: process.env.MC_MEMORY_MAX || '4096',
-      min: process.env.MC_MEMORY_MIN || '2048'
-    }
-  });
+    memory: calculateMemoryAllocation(memorySettings)
+  };
+
+  // Ensure JVM arguments are always a non-null array to satisfy ForgeWrapper expectations.
+  if (!Array.isArray(launchOptions.jvmArgs)) {
+    launchOptions.jvmArgs = [];
+  }
+
+  if (launchOptions.versionData?.arguments && !Array.isArray(launchOptions.versionData.arguments.jvm)) {
+    launchOptions.versionData.arguments.jvm = [];
+  }
+
+  launcher.launch(launchOptions);
 
   activeLaunch = launchPromise.finally(() => {
     activeLaunch = null;
@@ -495,5 +543,7 @@ module.exports = {
   isLaunching,
   checkLaunchRequirements,
   ensureBaseRuntime,
-  ensureMinecraftVersion
+  ensureMinecraftVersion,
+  buildMemoryPlan,
+  calculateMemoryAllocation
 };

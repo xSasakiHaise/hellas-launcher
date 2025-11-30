@@ -4,6 +4,8 @@ contextBridge.exposeInMainWorld('hellas', {
   getState: () => ipcRenderer.invoke('hellas:get-state'),
   setTermsAccepted: (value) => ipcRenderer.invoke('hellas:set-terms', value),
   setAnimationEnabled: (value) => ipcRenderer.invoke('hellas:set-animation', value),
+  getMemorySettings: () => ipcRenderer.invoke('hellas:get-memory-settings'),
+  setMemorySettings: (settings) => ipcRenderer.invoke('hellas:set-memory-settings', settings),
   beginDeviceLogin: () => ipcRenderer.invoke('hellas:start-device-login'),
   pollDeviceLogin: (payload) => ipcRenderer.invoke('hellas:poll-device-login', payload),
   performInstall: () => ipcRenderer.invoke('hellas:perform-install'),

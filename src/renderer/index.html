@@ -47,6 +47,7 @@
             <ul>
               <li><button data-action="dynmap">Dynmap</button></li>
               <li><button data-action="toggle-animation">Toggle Animation</button></li>
+              <li><button data-action="adjust-ram">Adjust RAM</button></li>
               <li><button data-action="open-logs">Open Logs</button></li>
               <li><button data-action="reinstall">Fresh reinstall</button></li>
               <li><button data-action="logout">Logout</button></li>
@@ -119,6 +120,69 @@
               <button id="open-login" class="secondary small" type="button">Open login.microsoft.com</button>
               <span id="device-message" class="device-message" role="status"></span>
             </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="memory-modal" hidden>
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <h2>Adjust RAM</h2>
+            <p class="subtitle">Choose how much memory the launcher should allocate to Minecraft.</p>
+          </div>
+          <button id="close-memory-modal" class="icon-button close-button" title="Close memory settings">
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
+
+        <div class="memory-settings">
+          <div class="memory-summary">
+            <div>
+              <p class="label">Total system RAM</p>
+              <p id="memory-total" class="value"></p>
+            </div>
+            <div>
+              <p class="label">Recommended (75%)</p>
+              <p id="memory-recommended" class="value"></p>
+            </div>
+            <div>
+              <p class="label">Currently applied</p>
+              <p id="memory-active" class="value"></p>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Allocation mode</label>
+            <div class="memory-mode-options">
+              <label>
+                <input type="radio" name="memory-mode" value="auto" id="memory-mode-auto" />
+                Automatic (75% of system RAM)
+              </label>
+              <label>
+                <input type="radio" name="memory-mode" value="custom" id="memory-mode-custom" />
+                Custom allocation
+              </label>
+            </div>
+          </div>
+
+          <div class="memory-grid" id="memory-custom-fields">
+            <div class="field">
+              <label for="memory-max">Maximum RAM (MB)</label>
+              <input id="memory-max" type="number" min="1024" step="256" inputmode="numeric" />
+            </div>
+            <div class="field">
+              <label for="memory-min">Minimum RAM (MB)</label>
+              <input id="memory-min" type="number" min="1024" step="256" inputmode="numeric" />
+            </div>
+          </div>
+
+          <p class="memory-note">Values are capped to your system RAM. Minimum memory cannot exceed the maximum.</p>
+
+          <div class="modal-actions">
+            <button id="save-memory" class="primary small">Save</button>
+            <button id="cancel-memory" class="tertiary small">Cancel</button>
           </div>
         </div>
       </div>

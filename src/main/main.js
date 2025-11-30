@@ -7,7 +7,14 @@ require('dotenv').config();
 
 const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall } = require('./update');
 const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
-const { launchModpack, cancelLaunch, isLaunching, checkLaunchRequirements, ensureBaseRuntime } = require('./launcher');
+const {
+  launchModpack,
+  cancelLaunch,
+  isLaunching,
+  checkLaunchRequirements,
+  ensureBaseRuntime,
+  buildMemoryPlan
+} = require('./launcher');
 const { initLogger, logMessage, getLauncherLogPath, readLauncherLog } = require('./logger');
 
 const isDevelopment = process.env.NODE_ENV === 'development';
@@ -63,6 +70,7 @@ function createStore() {
     installDir: path.join(app.getPath('appData'), 'Hellas'),
     installedVersion: '',
     lastKnownVersion: '',
+    memory: { mode: 'auto', minMb: null, maxMb: null },
     account: {
       username: '',
       refreshToken: ''
@@ -89,6 +97,47 @@ function getAccount() {
   };
 
   return resolved;
+}
+
+function normalizeMemorySettings(settings = {}) {
+  const mode = settings.mode === 'custom' ? 'custom' : 'auto';
+  const toNumber = (value) => {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) && parsed > 0 ? Math.round(parsed) : null;
+  };
+
+  return {
+    mode,
+    minMb: toNumber(settings.minMb),
+    maxMb: toNumber(settings.maxMb)
+  };
+}
+
+function getMemorySettings() {
+  return normalizeMemorySettings(store.get('memory') || {});
+}
+
+function setMemorySettings(settings) {
+  const normalized = normalizeMemorySettings(settings);
+  store.set('memory', normalized);
+  return normalized;
+}
+
+function getMemoryState() {
+  const settings = getMemorySettings();
+  const plan = buildMemoryPlan(settings);
+
+  return {
+    settings,
+    system: {
+      totalMb: plan.totalMemoryMb,
+      recommendedMb: plan.recommendedMb
+    },
+    applied: {
+      minMb: plan.minMb,
+      maxMb: plan.maxMb
+    }
+  };
 }
 
 function getSessionAccount() {
@@ -399,6 +448,7 @@ ipcMain.handle('hellas:get-state', async () => {
     account: getAccount(),
     termsAccepted: store.get('termsAccepted'),
     animationEnabled: store.get('animationEnabled'),
+    memory: getMemoryState(),
     update: {
       hasUpdateSource: Boolean(updateSource),
       preferredVersion,
@@ -415,6 +465,13 @@ ipcMain.handle('hellas:set-terms', async (_event, value) => {
 ipcMain.handle('hellas:set-animation', async (_event, value) => {
   store.set('animationEnabled', Boolean(value));
   return store.get('animationEnabled');
+});
+
+ipcMain.handle('hellas:get-memory-settings', async () => getMemoryState());
+
+ipcMain.handle('hellas:set-memory-settings', async (_event, settings) => {
+  setMemorySettings(settings);
+  return getMemoryState();
 });
 
 ipcMain.handle('hellas:start-device-login', async () => requestDeviceCode());
@@ -561,11 +618,13 @@ ipcMain.handle('hellas:logout', async () => {
       sendLaunchStatus({ message: `Resolving missing components: ${missing.join(', ')}` });
     }
     sendLaunchStatus({ message: 'Starting Minecraft launch…' });
+    const memorySettings = getMemorySettings();
     const { launchedWith } = await launchModpack({
       installDir,
       account,
       onStatus: sendLaunchStatus,
-      expectedModpackVersion
+      expectedModpackVersion,
+      memorySettings
     });
     sendLaunchStatus({ message: `Launch completed with Forge ${launchedWith}`, level: 'success' });
     logMessage('info', 'Launch completed', { launchedWith });
