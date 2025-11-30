@@ -116,6 +116,7 @@ async function getInstallationState() {
   let minecraftVersion = null;
   let detectedModpackVersion = null;
   let modpackErrors = [];
+  let searchedModDirectories = [];
   const expectedModpackVersion = store.get('lastKnownVersion') || store.get('installedVersion') || null;
 
   try {
@@ -125,6 +126,7 @@ async function getInstallationState() {
     minecraftVersion = check.minecraftVersion;
     detectedModpackVersion = check.modpackVersion || null;
     modpackErrors = check.modpackErrors || [];
+    searchedModDirectories = check.searchedModDirectories || [];
   } catch (error) {
     console.warn('Unable to verify installation readiness', error);
   }
@@ -152,6 +154,7 @@ async function getInstallationState() {
     installedVersion: resolvedInstalledVersion || installedVersion,
     lastKnownVersion,
     modpackErrors,
+    searchedModDirectories,
     requirements,
     forgeVersion,
     minecraftVersion
@@ -444,7 +447,10 @@ ipcMain.handle('hellas:logout', async () => {
     const modpackErrorDetails = (installation.modpackErrors || [])
       .map((error) => `${error.path}: ${error.message}${error.code ? ` (${error.code})` : ''}`)
       .join('; ');
-    const details = modpackErrorDetails ? ` Details: ${modpackErrorDetails}` : '';
+    const searchedDirs = installation.searchedModDirectories?.length
+      ? ` Searched mod directories: ${installation.searchedModDirectories.join(', ')}`
+      : '';
+    const details = modpackErrorDetails ? ` Details: ${modpackErrorDetails}.${searchedDirs}` : searchedDirs;
     sendLaunchStatus({
       message: `Launch blocked: install the modpack before starting.${details}`,
       level: 'error'
@@ -452,28 +458,34 @@ ipcMain.handle('hellas:logout', async () => {
     throw new Error(`Cannot launch until the modpack and dependencies are installed.${details}`);
   }
 
-    if (launchInProgress || isLaunching()) {
-      throw new Error('A launch is already running.');
-    }
+  if (launchInProgress || isLaunching()) {
+    throw new Error('A launch is already running.');
+  }
 
-    launchInProgress = true;
-    try {
-      sendLaunchStatus({ message: 'Starting Minecraft launch…' });
-      const { launchedWith } = await launchModpack({
-        installDir,
-        account,
-        onStatus: sendLaunchStatus,
-        expectedModpackVersion
-      });
-      sendLaunchStatus({ message: `Launch completed with Forge ${launchedWith}`, level: 'success' });
-      return { account: { username: account.username }, installDir, launchedWith };
-    } catch (error) {
-      sendLaunchStatus({ message: error.message || 'Failed to launch.', level: 'error' });
-      throw error;
-    } finally {
-      launchInProgress = false;
+  launchInProgress = true;
+  try {
+    const missing = Object.entries(installation.requirements || {})
+      .filter(([, present]) => !present)
+      .map(([key]) => key.toUpperCase());
+    if (missing.length) {
+      sendLaunchStatus({ message: `Resolving missing components: ${missing.join(', ')}` });
     }
-  });
+    sendLaunchStatus({ message: 'Starting Minecraft launch…' });
+    const { launchedWith } = await launchModpack({
+      installDir,
+      account,
+      onStatus: sendLaunchStatus,
+      expectedModpackVersion
+    });
+    sendLaunchStatus({ message: `Launch completed with Forge ${launchedWith}`, level: 'success' });
+    return { account: { username: account.username }, installDir, launchedWith };
+  } catch (error) {
+    sendLaunchStatus({ message: error.message || 'Failed to launch.', level: 'error' });
+    throw error;
+  } finally {
+    launchInProgress = false;
+  }
+});
 
 ipcMain.handle('hellas:cancel-launch', async () => {
   launchInProgress = false;

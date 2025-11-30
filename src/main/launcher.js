@@ -283,7 +283,13 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
     ? await fs
         .access(forgePath)
         .then(() => true)
-        .catch(() => false)
+        .catch(
+          async () =>
+            await fs
+              .access(forgeInstallerPath)
+              .then(() => true)
+              .catch(() => false)
+        )
     : await fs
         .access(forgeInstallerPath)
         .then(() => true)
@@ -305,6 +311,7 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
     forgeVersion,
     forgeInstallerPath,
     modpackVersion: detectedVersion,
+    searchedModDirectories: modDirectories,
     modpackErrors,
     requirements: {
       minecraft: minecraftPresent,
@@ -348,10 +355,8 @@ async function launchModpack({
 
   await ensureInstallDirExists(installDir);
   onStatus({ message: `Checking installation in ${installDir}` });
-  const { requirements, forgeVersion, forgeInstallerPath, modpackErrors } = await checkLaunchRequirements(
-    installDir,
-    expectedModpackVersion
-  );
+  const { requirements, forgeVersion, forgeInstallerPath, modpackErrors, searchedModDirectories } =
+    await checkLaunchRequirements(installDir, expectedModpackVersion);
   const missing = Object.entries(requirements)
     .filter(([, present]) => !present)
     .map(([key]) => key);
@@ -361,7 +366,10 @@ async function launchModpack({
     const modpackErrorDetails = modpackErrors
       .map((error) => `${error.path}: ${error.message}${error.code ? ` (${error.code})` : ''}`)
       .join('; ');
-    const details = modpackErrorDetails ? ` Details: ${modpackErrorDetails}` : '';
+    const searchedDirs = searchedModDirectories?.length
+      ? ` Searched mod directories: ${searchedModDirectories.join(', ')}`
+      : '';
+    const details = modpackErrorDetails ? ` Details: ${modpackErrorDetails}.${searchedDirs}` : searchedDirs;
     throw new Error(
       `Cannot launch yet. Missing components: ${missingCritical
         .map((item) => item.toUpperCase())
@@ -369,16 +377,33 @@ async function launchModpack({
     );
   }
 
-  if (missing.length) {
-    onStatus({ message: 'Downloading missing Minecraft and Forge files...' });
-  }
-
   let resolvedForgeInstaller = forgeInstallerPath;
-  if (!requirements.forge) {
-    resolvedForgeInstaller = await ensureForgeInstaller(installDir, forgeVersion, onStatus);
+  if (missing.length) {
+    onStatus({
+      message: `Preparing runtime. Missing components: ${missing.map((item) => item.toUpperCase()).join(', ')}`
+    });
   }
 
-  const gameDirectory = await findGameDirectory(installDir);
+  if (!requirements.minecraft) {
+    try {
+      await ensureMinecraftVersion(installDir, DEFAULT_MC_VERSION, onStatus);
+    } catch (error) {
+      throw new Error(`Failed while downloading Minecraft ${DEFAULT_MC_VERSION}: ${error.message}`);
+    }
+  }
+
+  if (!requirements.forge) {
+    try {
+      resolvedForgeInstaller = await ensureForgeInstaller(installDir, forgeVersion, onStatus);
+    } catch (error) {
+      throw new Error(`Failed while downloading Forge ${forgeVersion}: ${error.message}`);
+    }
+  }
+
+  const gameDirectory = await findGameDirectory(installDir).catch((error) => {
+    throw new Error(`Could not resolve modpack folder under ${installDir}: ${error.message}`);
+  });
+  onStatus({ message: `Launching from ${gameDirectory}` });
 
   const auth = {
     access_token: account.accessToken,
