@@ -4,6 +4,7 @@ const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const Store = require('electron-store');
 const semver = require('semver');
 require('dotenv').config();
+const { HELLAS_ROOT, ensureDirectories } = require('./paths');
 
 const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall } = require('./update');
 const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
@@ -67,7 +68,7 @@ function createStore() {
   const defaults = {
     termsAccepted: false,
     animationEnabled: process.env.AETHERVEIL_ANIM_ENABLED !== 'false',
-    installDir: path.join(app.getPath('appData'), 'Hellas'),
+    installDir: HELLAS_ROOT,
     installedVersion: '',
     lastKnownVersion: '',
     memory: { mode: 'auto', minMb: null, maxMb: null },
@@ -86,7 +87,12 @@ function createStore() {
 }
 
 function getInstallDir() {
-  return store.get('installDir');
+  // Enforce the Hellas layout at %APPDATA%/Hellas with the modpack stored in
+  // the /modpack folder. Persist the value in the store so subsequent runs stay
+  // consistent, but do not allow overrides.
+  store.set('installDir', HELLAS_ROOT);
+  ensureDirectories(HELLAS_ROOT);
+  return HELLAS_ROOT;
 }
 
 function getAccount() {

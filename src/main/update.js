@@ -11,6 +11,18 @@ const MODPACK_DIR_NAME = 'modpack';
 const MODS_DIR_NAME = 'mods';
 const RESOURCEPACKS_DIR_NAME = 'resourcepacks';
 const SERVER_FILES = ['servers.dat', 'servers.dat_old'];
+const LOG4J_CONFIG_FILENAME = 'log4j2_112-116.xml';
+const LEGACY_ROOT_DIRS = [
+  'config',
+  'mods',
+  'assets',
+  'defaultconfigs',
+  'libraries',
+  'natives',
+  'logs',
+  '.mixin.out'
+];
+const LEGACY_ROOT_FILES = [LOG4J_CONFIG_FILENAME];
 
 function resolveUpdateSource() {
   const feedUrl = (process.env.PACK_FEED_URL || '').trim();
@@ -88,6 +100,10 @@ async function ensureModpackStructure(targetDir) {
 }
 
 async function moveDirectoryContents(sourceDir, destinationDir) {
+  if (path.resolve(sourceDir) === path.resolve(destinationDir)) {
+    return false;
+  }
+
   const exists = await fs.promises
     .stat(sourceDir)
     .then((stats) => stats.isDirectory())
@@ -138,6 +154,20 @@ async function moveFileIfExists(sourcePath, destinationPath) {
   }
 
   return true;
+}
+
+async function migrateRootContent(targetDir, modpackDir) {
+  for (const dirName of LEGACY_ROOT_DIRS) {
+    const sourceDir = path.join(targetDir, dirName);
+    const destinationDir = path.join(modpackDir, dirName);
+    await moveDirectoryContents(sourceDir, destinationDir);
+  }
+
+  for (const fileName of LEGACY_ROOT_FILES) {
+    const sourceFile = path.join(targetDir, fileName);
+    const destinationFile = path.join(modpackDir, fileName);
+    await moveFileIfExists(sourceFile, destinationFile);
+  }
 }
 
 async function downloadAndExtractUpdate(source, targetDir, progressCallback = () => {}, abortSignal) {
@@ -263,6 +293,7 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
     // are fully replaced to avoid stale content lingering between updates.
     const legacyModsDir = path.join(targetDir, MODS_DIR_NAME);
     const legacyResourcepacksDir = path.join(targetDir, RESOURCEPACKS_DIR_NAME);
+    await migrateRootContent(targetDir, modpackDir);
     await fs.promises.rm(modsDir, { recursive: true, force: true });
     await fs.promises.rm(resourcepacksDir, { recursive: true, force: true });
     await fs.promises.rm(legacyModsDir, { recursive: true, force: true });
@@ -273,13 +304,13 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
 
     const zip = new AdmZip(tempZipPath);
     zip.getEntries().forEach((entry) => {
-      const entryPath = path.join(targetDir, entry.entryName);
+      const entryPath = path.join(modpackDir, entry.entryName);
       if (entry.isDirectory) {
         fs.mkdirSync(entryPath, { recursive: true });
       }
     });
     ensureNotCancelled(abortSignal);
-    zip.extractAllTo(targetDir, true);
+    zip.extractAllTo(modpackDir, true);
 
     await ensureModpackStructure(targetDir);
     await moveDirectoryContents(legacyModsDir, modsDir);
