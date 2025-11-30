@@ -5,42 +5,53 @@ const path = require('node:path');
 const fs = require('node:fs');
 const fsp = fs.promises;
 
-const { getBundledJavaPath } = require('../src/main/launcher');
+const { resolveBundledJava } = require('../src/main/javaResolver');
 
-function javaExecutableName() {
-  return process.platform === 'win32' ? 'javaw.exe' : 'java';
-}
+const JAVA_EXECUTABLE = 'javaw.exe';
 
-test('getBundledJavaPath respects a direct executable path via BUNDLED_JAVA_PATH', async () => {
-  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'hellas-java-path-exec-'));
-  const javaPath = path.join(tempDir, javaExecutableName());
+test('resolveBundledJava prefers bundled Java 8', async () => {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'hellas-java-path-jre8-'));
+  const jre8Bin = path.join(tempDir, 'jre8', 'bin');
+  await fsp.mkdir(jre8Bin, { recursive: true });
+  const javaPath = path.join(jre8Bin, JAVA_EXECUTABLE);
   await fsp.writeFile(javaPath, '');
-  const originalEnv = process.env.BUNDLED_JAVA_PATH;
-  process.env.BUNDLED_JAVA_PATH = javaPath;
+
+  const originalResourcesPath = process.resourcesPath;
+  process.resourcesPath = tempDir;
 
   try {
-    assert.equal(getBundledJavaPath(), javaPath);
+    assert.equal(resolveBundledJava(), javaPath);
   } finally {
-    process.env.BUNDLED_JAVA_PATH = originalEnv;
+    process.resourcesPath = originalResourcesPath;
     await fsp.rm(tempDir, { recursive: true, force: true });
   }
 });
 
-test('getBundledJavaPath resolves a directory provided via BUNDLED_JAVA_PATH', async () => {
-  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'hellas-java-path-dir-'));
-  const javaDir = path.join(tempDir, 'jre');
-  const binDir = path.join(javaDir, 'bin');
-  await fsp.mkdir(binDir, { recursive: true });
-  const javaPath = path.join(binDir, javaExecutableName());
+test('resolveBundledJava falls back to bundled Java 11 when Java 8 is missing', async () => {
+  const tempDir = await fsp.mkdtemp(path.join(os.tmpdir(), 'hellas-java-path-jre11-'));
+  const jre11Bin = path.join(tempDir, 'jre11', 'bin');
+  await fsp.mkdir(jre11Bin, { recursive: true });
+  const javaPath = path.join(jre11Bin, JAVA_EXECUTABLE);
   await fsp.writeFile(javaPath, '');
 
-  const originalEnv = process.env.BUNDLED_JAVA_PATH;
-  process.env.BUNDLED_JAVA_PATH = javaDir;
+  const originalResourcesPath = process.resourcesPath;
+  process.resourcesPath = tempDir;
 
   try {
-    assert.equal(getBundledJavaPath(), javaPath);
+    assert.equal(resolveBundledJava(), javaPath);
   } finally {
-    process.env.BUNDLED_JAVA_PATH = originalEnv;
+    process.resourcesPath = originalResourcesPath;
     await fsp.rm(tempDir, { recursive: true, force: true });
+  }
+});
+
+test('resolveBundledJava uses system Java when no bundles exist', () => {
+  const originalResourcesPath = process.resourcesPath;
+  process.resourcesPath = path.join(os.tmpdir(), 'hellas-java-path-none');
+
+  try {
+    assert.equal(resolveBundledJava(), 'javaw');
+  } finally {
+    process.resourcesPath = originalResourcesPath;
   }
 });
