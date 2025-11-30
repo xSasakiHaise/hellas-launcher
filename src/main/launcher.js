@@ -105,13 +105,14 @@ function parseJavaVersion(output = '') {
 
 async function detectJavaVersion(javaExecutable) {
   return new Promise((resolve) => {
-    execFile(javaExecutable, ['-version'], (error, _stdout, stderr) => {
+    execFile(javaExecutable, ['-version'], (error, stdout, stderr) => {
       if (error) {
         resolve({ version: null, major: null });
         return;
       }
 
-      resolve(parseJavaVersion(stderr || ''));
+      const combinedOutput = [stderr, stdout].filter(Boolean).join('\n');
+      resolve(parseJavaVersion(combinedOutput));
     });
   });
 }
@@ -590,11 +591,19 @@ async function launchModpack({
 
   const javaExecutable = javaPath || 'java';
   const { major: javaMajor, version: javaVersion } = await detectJavaVersion(javaExecutable);
-  if (javaMajor && javaMajor >= 17) {
+  if (javaMajor && ![8, 11].includes(javaMajor)) {
     throw new Error(
       `Incompatible Java runtime detected (version ${javaVersion}). Forge 1.16.5 requires Java 8 or 11. ` +
         'Please reinstall to include the bundled Java 11 runtime or configure a compatible Java path.'
     );
+  }
+
+  if (!javaMajor) {
+    onStatus({
+      message:
+        'Unable to determine Java version; launching may fail. Please ensure Java 8 or 11 is configured.',
+      level: 'warning'
+    });
   }
 
   const launchOptions = {
