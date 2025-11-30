@@ -29,6 +29,18 @@ const copyCodeButton = document.getElementById('copy-code');
 const closeAccountModal = document.getElementById('close-account-modal');
 const launchLog = document.getElementById('launch-log');
 const cancelLaunchButton = document.getElementById('cancel-launch-button');
+const memoryModal = document.getElementById('memory-modal');
+const closeMemoryModal = document.getElementById('close-memory-modal');
+const saveMemoryButton = document.getElementById('save-memory');
+const cancelMemoryButton = document.getElementById('cancel-memory');
+const memoryModeAuto = document.getElementById('memory-mode-auto');
+const memoryModeCustom = document.getElementById('memory-mode-custom');
+const memoryCustomFields = document.getElementById('memory-custom-fields');
+const memoryMaxInput = document.getElementById('memory-max');
+const memoryMinInput = document.getElementById('memory-min');
+const memoryTotal = document.getElementById('memory-total');
+const memoryRecommended = document.getElementById('memory-recommended');
+const memoryActive = document.getElementById('memory-active');
 
 let launcherState = {
   termsAccepted: false,
@@ -54,6 +66,12 @@ let launcherState = {
     preferredVersion: null
   },
   isUpdating: false
+};
+
+let memoryState = {
+  settings: { mode: 'auto', minMb: null, maxMb: null },
+  system: { totalMb: 0, recommendedMb: 0 },
+  applied: { minMb: 0, maxMb: 0 }
 };
 
 let activeDeviceLogin = null;
@@ -85,6 +103,85 @@ function appendLaunchLog(message, level = 'info') {
   entry.textContent = message;
   launchLog.appendChild(entry);
   launchLog.scrollTop = launchLog.scrollHeight;
+}
+
+function formatMegabytes(value) {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric <= 0) {
+    return '—';
+  }
+  return `${numeric.toLocaleString()} MB`;
+}
+
+function applyMemoryState(nextState = {}) {
+  memoryState = {
+    settings: { ...memoryState.settings, ...(nextState.settings || {}) },
+    system: { ...memoryState.system, ...(nextState.system || {}) },
+    applied: { ...memoryState.applied, ...(nextState.applied || {}) }
+  };
+  updateMemorySummary();
+  syncMemoryForm();
+}
+
+function updateMemorySummary() {
+  if (!memoryTotal || !memoryRecommended || !memoryActive) return;
+
+  memoryTotal.textContent = formatMegabytes(memoryState.system.totalMb);
+  memoryRecommended.textContent = formatMegabytes(memoryState.system.recommendedMb);
+
+  const minText = formatMegabytes(memoryState.applied.minMb);
+  const maxText = formatMegabytes(memoryState.applied.maxMb);
+  memoryActive.textContent = minText === '—' && maxText === '—' ? '—' : `${minText} – ${maxText}`;
+}
+
+function syncMemoryForm() {
+  if (!memoryModeAuto || !memoryModeCustom || !memoryMaxInput || !memoryMinInput) return;
+
+  const mode = memoryState.settings?.mode === 'custom' ? 'custom' : 'auto';
+  memoryModeAuto.checked = mode === 'auto';
+  memoryModeCustom.checked = mode === 'custom';
+
+  const customEnabled = mode === 'custom';
+  memoryCustomFields?.classList.toggle('disabled', !customEnabled);
+  memoryMaxInput.disabled = !customEnabled;
+  memoryMinInput.disabled = !customEnabled;
+
+  const fallbackMax = memoryState.applied.maxMb || memoryState.system.recommendedMb;
+  const fallbackMin = memoryState.applied.minMb || Math.max(1024, Math.floor(fallbackMax / 2));
+
+  memoryMaxInput.value = customEnabled ? memoryState.settings.maxMb || fallbackMax || '' : '';
+  memoryMinInput.value = customEnabled ? memoryState.settings.minMb || fallbackMin || '' : '';
+}
+
+function setMemoryModal(open) {
+  if (!memoryModal) return;
+  memoryModal.hidden = !open;
+  if (open) {
+    syncMemoryForm();
+  }
+}
+
+async function openMemorySettings() {
+  try {
+    const state = await window.hellas.getMemorySettings();
+    applyMemoryState(state || {});
+    setMemoryModal(true);
+  } catch (error) {
+    console.error('Failed to load memory settings', error);
+    appendLaunchLog('Unable to open memory settings right now.', 'error');
+  }
+}
+
+function readMemoryForm() {
+  const mode = memoryModeCustom?.checked ? 'custom' : 'auto';
+  const maxMb = Number(memoryMaxInput?.value);
+  const minMb = Number(memoryMinInput?.value);
+
+  return {
+    mode,
+    maxMb: Number.isFinite(maxMb) ? maxMb : null,
+    minMb: Number.isFinite(minMb) ? minMb : null
+  };
 }
 
 function setDropdown(open) {
@@ -376,6 +473,7 @@ async function refreshState() {
   } else {
     setAccountStatus('Not logged in', true);
   }
+  applyMemoryState(state.memory || {});
   updateAccountUi();
   updateStartButtonState();
   updateInstallLabels();
@@ -395,6 +493,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape') {
     setDropdown(false);
     setAccountPanel(false);
+    setMemoryModal(false);
   }
 });
 
@@ -419,6 +518,14 @@ if (accountModal) {
   accountModal.addEventListener('click', (event) => {
     if (event.target === accountModal) {
       setAccountPanel(false);
+    }
+  });
+}
+
+if (memoryModal) {
+  memoryModal.addEventListener('click', (event) => {
+    if (event.target === memoryModal) {
+      setMemoryModal(false);
     }
   });
 }
@@ -486,6 +593,37 @@ if (copyCodeButton) {
       deviceMessage.textContent = 'Code copied. Complete sign-in in your browser.';
     } catch (error) {
       deviceMessage.textContent = 'Copy failed. Enter the code manually.';
+    }
+  });
+}
+
+if (closeMemoryModal) {
+  closeMemoryModal.addEventListener('click', () => setMemoryModal(false));
+}
+
+if (cancelMemoryButton) {
+  cancelMemoryButton.addEventListener('click', () => setMemoryModal(false));
+}
+
+if (memoryModeAuto && memoryModeCustom) {
+  [memoryModeAuto, memoryModeCustom].forEach((radio) => {
+    radio.addEventListener('change', () => {
+      syncMemoryForm();
+    });
+  });
+}
+
+if (saveMemoryButton) {
+  saveMemoryButton.addEventListener('click', async () => {
+    const payload = readMemoryForm();
+    try {
+      const state = await window.hellas.setMemorySettings(payload);
+      applyMemoryState(state || {});
+      appendLaunchLog('Memory settings updated.');
+      setMemoryModal(false);
+    } catch (error) {
+      console.error('Failed to save memory settings', error);
+      appendLaunchLog('Unable to save memory settings. Please try again.', 'error');
     }
   });
 }
@@ -628,6 +766,9 @@ dropdownActions.forEach((button) => {
           launcherState.animationEnabled = !launcherState.animationEnabled;
           await window.hellas.setAnimationEnabled(launcherState.animationEnabled);
           applyAnimationState();
+          break;
+        case 'adjust-ram':
+          await openMemorySettings();
           break;
         case 'open-logs': {
           try {

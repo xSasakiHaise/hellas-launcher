@@ -227,7 +227,8 @@ body {
 .content {
   flex: 1;
   display: flex;
-  align-items: flex-end;
+  align-items: center;
+  justify-content: center;
   padding: 0 48px 64px 48px;
 }
 
@@ -567,6 +568,85 @@ button.primary:not([disabled]) .lock {
 
 .modal .subtitle {
   margin: 6px 0 0;
+}
+
+.memory-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.memory-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 14px;
+}
+
+.memory-summary .label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.memory-summary .value {
+  margin: 4px 0 0;
+  font-weight: 600;
+}
+
+.memory-mode-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text);
+}
+
+.memory-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 12px;
+}
+
+.memory-grid.disabled {
+  opacity: 0.5;
+}
+
+.memory-grid .field label,
+.memory-settings .field label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.memory-settings .field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.memory-grid input,
+.memory-settings input[type='number'] {
+  height: 40px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(0, 0, 0, 0.35);
+  color: var(--text);
+  padding: 0 12px;
+  width: 100%;
+}
+
+.memory-note {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
 }
 
 @media (max-width: 900px) {
