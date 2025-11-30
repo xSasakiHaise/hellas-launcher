@@ -10,6 +10,28 @@ const FORGE_METADATA_URL = 'https://maven.minecraftforge.net/net/minecraftforge/
 const VERSION_MANIFEST_URL = 'https://launchermeta.mojang.com/mc/game/version_manifest_v2.json';
 const launcher = new Client();
 
+function getBundledJavaPath() {
+  const javaExecutable = process.platform === 'win32' ? 'javaw.exe' : 'java';
+  const resourcesJre = path.join(process.resourcesPath, 'jre11');
+  const devJre = path.join(__dirname, '..', '..', 'jre11-win64');
+  const candidates = [resourcesJre, devJre].map((base) =>
+    path.join(base, 'bin', javaExecutable)
+  );
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  const fallback = path.join(resourcesJre, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+  if (fs.existsSync(fallback)) {
+    return fallback;
+  }
+
+  return null;
+}
+
 let cachedForgeVersion = null;
 let activeLaunch = null;
 
@@ -46,9 +68,27 @@ function calculateMemoryAllocation(memorySettings = {}) {
   const plan = buildMemoryPlan(memorySettings);
 
   return {
-    max: `${plan.maxMb}`,
-    min: `${plan.minMb}`
+    max: `${plan.maxMb}M`,
+    min: `${plan.minMb}M`
   };
+}
+
+function buildJvmArgs(memorySettings = {}) {
+  const plan = buildMemoryPlan(memorySettings);
+  const memoryArgs = [`-Xmx${plan.maxMb}M`, `-Xms${plan.minMb}M`];
+
+  const defaultJvmArgs = [
+    ...memoryArgs,
+    '-Dfml.ignoreInvalidMinecraftCertificates=true',
+    '-Dfml.ignorePatchDiscrepancies=true',
+    '-Dlog4j.configurationFile=log4j2_112-116.xml'
+  ];
+
+  const userJvmArgs = Array.isArray(memorySettings.jvmArgs)
+    ? memorySettings.jvmArgs.filter((arg) => typeof arg === 'string')
+    : [];
+
+  return [...defaultJvmArgs, ...userJvmArgs];
 }
 
 async function ensureInstallDirExists(installDir) {
@@ -493,9 +533,14 @@ async function launchModpack({
   });
 
   onStatus({ message: `Launching with Forge ${forgeVersion}` });
-  const jvmArgs = Array.isArray(memorySettings.jvmArgs)
-    ? memorySettings.jvmArgs.filter((arg) => typeof arg === 'string')
-    : [];
+  const jvmArgs = buildJvmArgs(memorySettings);
+  const javaPath = getBundledJavaPath();
+  if (!javaPath) {
+    onStatus({
+      message: 'Bundled Java 11 runtime not found; falling back to system Java. Compatibility not guaranteed.',
+      level: 'warning'
+    });
+  }
 
   const launchOptions = {
     root: installDir,
@@ -507,7 +552,8 @@ async function launchModpack({
     },
     forge: resolvedForgeInstaller,
     memory: calculateMemoryAllocation(memorySettings),
-    jvmArgs
+    jvmArgs,
+    javaPath: javaPath || undefined
   };
 
   // Ensure JVM arguments are always a non-null array to satisfy ForgeWrapper expectations.
