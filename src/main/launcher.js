@@ -16,21 +16,47 @@ const launcher = new Client();
 
 function getBundledJavaPath() {
   const javaExecutable = process.platform === 'win32' ? 'javaw.exe' : 'java';
-  const resourcesJre = path.join(process.resourcesPath, 'jre11');
+  const envPath = process.env.BUNDLED_JAVA_PATH
+    ? path.resolve(process.env.BUNDLED_JAVA_PATH)
+    : null;
+  const resourcesJre = process.resourcesPath ? path.join(process.resourcesPath, 'jre11') : null;
   const devJre = path.join(__dirname, '..', '..', 'jre11-win64');
-  const candidates = [resourcesJre, devJre].map((base) =>
-    path.join(base, 'bin', javaExecutable)
-  );
 
-  for (const candidate of candidates) {
-    if (fs.existsSync(candidate)) {
-      return candidate;
+  const candidatePaths = [];
+
+  if (envPath) {
+    candidatePaths.push(envPath);
+    candidatePaths.push(path.join(envPath, 'bin', javaExecutable));
+    candidatePaths.push(
+      path.join(envPath, 'bin', process.platform === 'win32' ? 'java.exe' : 'java')
+    );
+  }
+
+  if (resourcesJre) {
+    candidatePaths.push(path.join(resourcesJre, 'bin', javaExecutable));
+  }
+  candidatePaths.push(path.join(devJre, 'bin', javaExecutable));
+
+  for (const candidate of candidatePaths) {
+    if (!candidate || !fs.existsSync(candidate)) {
+      continue;
+    }
+
+    try {
+      const stats = fs.statSync(candidate);
+      if (stats.isFile()) {
+        return candidate;
+      }
+    } catch (error) {
+      // Ignore filesystem errors and continue to the next candidate.
     }
   }
 
-  const fallback = path.join(resourcesJre, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
-  if (fs.existsSync(fallback)) {
-    return fallback;
+  if (resourcesJre) {
+    const fallback = path.join(resourcesJre, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+    if (fs.existsSync(fallback)) {
+      return fallback;
+    }
   }
 
   return null;
@@ -591,6 +617,9 @@ async function launchModpack({
 
   const javaExecutable = javaPath || 'java';
   const { major: javaMajor, version: javaVersion } = await detectJavaVersion(javaExecutable);
+  if (javaPath) {
+    onStatus({ message: `Using bundled Java runtime at ${javaPath}` });
+  }
   if (javaMajor && ![8, 11].includes(javaMajor)) {
     throw new Error(
       `Incompatible Java runtime detected (version ${javaVersion}). Forge 1.16.5 requires Java 8 or 11. ` +
@@ -656,5 +685,6 @@ module.exports = {
   ensureBaseRuntime,
   ensureMinecraftVersion,
   buildMemoryPlan,
-  calculateMemoryAllocation
+  calculateMemoryAllocation,
+  getBundledJavaPath
 };
