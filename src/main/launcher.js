@@ -493,6 +493,10 @@ async function launchModpack({
   });
 
   onStatus({ message: `Launching with Forge ${forgeVersion}` });
+  const jvmArgs = Array.isArray(memorySettings.jvmArgs)
+    ? memorySettings.jvmArgs.filter((arg) => typeof arg === 'string')
+    : [];
+
   const launchOptions = {
     root: installDir,
     authorization: auth,
@@ -502,7 +506,8 @@ async function launchModpack({
       type: 'release'
     },
     forge: resolvedForgeInstaller,
-    memory: calculateMemoryAllocation(memorySettings)
+    memory: calculateMemoryAllocation(memorySettings),
+    jvmArgs
   };
 
   // Ensure JVM arguments are always a non-null array to satisfy ForgeWrapper expectations.
