@@ -95,11 +95,9 @@ function setDropdown(open) {
 
 function updateStartButtonState() {
   const { termsAccepted, installation, isUpdating } = launcherState;
-  const requiresInstall = !installation.isInstalled;
   startButton.querySelector('.label').textContent = 'PLAY';
-  startButton.disabled =
-    !termsAccepted || requiresInstall || updateInProgress || launchInProgress || isUpdating;
-  startButton.classList.toggle('needs-install', requiresInstall);
+  startButton.disabled = !termsAccepted || updateInProgress || launchInProgress || isUpdating;
+  startButton.classList.toggle('needs-install', !installation.isInstalled);
 }
 
 function updateInstallLabels() {
@@ -161,8 +159,7 @@ function setUpdating(isUpdating, options = {}) {
   const { resetText = true, mode = 'update' } = options;
   updateInProgress = isUpdating;
   launcherState.isUpdating = isUpdating;
-  startButton.disabled =
-    isUpdating || !launcherState.termsAccepted || !launcherState.installation.isInstalled || launchInProgress;
+  startButton.disabled = isUpdating || !launcherState.termsAccepted || launchInProgress;
   updateButton.disabled = isUpdating;
   updateProgress.hidden = !isUpdating;
   updateProgress.classList.remove('error');
@@ -494,11 +491,15 @@ if (copyCodeButton) {
 }
 
 startButton.addEventListener('click', async () => {
-  if (!launcherState.termsAccepted || !launcherState.installation.isInstalled) {
+  if (!launcherState.termsAccepted) {
     return;
   }
 
   clearLaunchLog();
+
+  if (!launcherState.installation.isInstalled) {
+    appendLaunchLog('Warning: Modpack not installed. Launch may fail.');
+  }
 
   if (!launcherState.account.loggedIn) {
     setAccountStatus('Please log in before launching.', true);
