@@ -12,31 +12,24 @@ const launcher = new Client();
 
 function getBundledJavaPath() {
   const javaExecutable = process.platform === 'win32' ? 'javaw.exe' : 'java';
-  const providedPath = process.env.BUNDLED_JAVA_PATH;
-  const candidates = [];
-
-  if (providedPath) {
-    candidates.push(
-      providedPath,
-      path.join(providedPath, 'bin', javaExecutable)
-    );
-  }
-
   const resourcesJre = path.join(process.resourcesPath, 'jre11');
-  candidates.push(path.join(resourcesJre, 'bin', javaExecutable));
-
   const devJre = path.join(__dirname, '..', '..', 'jre11-win64');
-  candidates.push(path.join(devJre, 'bin', javaExecutable));
+  const candidates = [resourcesJre, devJre].map((base) =>
+    path.join(base, 'bin', javaExecutable)
+  );
 
   for (const candidate of candidates) {
-    if (candidate && fs.existsSync(candidate)) {
+    if (fs.existsSync(candidate)) {
       return candidate;
     }
   }
 
-  const missingMessage =
-    'Bundled Java 11 runtime not found. Ensure jre11-win64 is present (or set BUNDLED_JAVA_PATH) before launching.';
-  throw new Error(missingMessage);
+  const fallback = path.join(resourcesJre, 'bin', process.platform === 'win32' ? 'java.exe' : 'java');
+  if (fs.existsSync(fallback)) {
+    return fallback;
+  }
+
+  return null;
 }
 
 let cachedForgeVersion = null;
