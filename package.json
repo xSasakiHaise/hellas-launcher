@@ -31,6 +31,12 @@
     "extraMetadata": {
       "main": "src/main/main.js"
     },
+    "extraResources": [
+      {
+        "from": "jre11-win64",
+        "to": "jre11"
+      }
+    ],
     "win": {
       "target": [
         {
