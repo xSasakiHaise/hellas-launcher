@@ -157,6 +157,17 @@ Test-CommandAvailable npm $nodeHint
 Test-PythonSupport
 Test-JsonCompliance -Paths @("package.json", ".eslintrc.json")
 
+$jreDir = Join-Path $PSScriptRoot "jre11-win64"
+if (-not (Test-Path $jreDir)) {
+  Write-Warning "Bundled Java runtime folder '$jreDir' is missing. Create it and place a Java 11 runtime inside (or set BUNDLED_JAVA_PATH) before packaging."
+  New-Item -ItemType Directory -Path $jreDir -Force | Out-Null
+}
+
+$javaExe = Join-Path $jreDir "bin/java.exe"
+if (-not (Test-Path $javaExe)) {
+  Write-Warning "Java 11 executable not found at $javaExe. The launcher requires a bundled Java 11 runtime to avoid compatibility issues."
+}
+
 if (-not (Test-Path ".env")) {
   Copy-Item ".env.example" ".env"
   Write-Host "Created .env from .env.example. Edit it as needed." -ForegroundColor Yellow
