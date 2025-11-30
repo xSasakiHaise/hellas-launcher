@@ -39,6 +39,8 @@ The resulting executable is placed in `dist/Hellas Launcher.exe`.
 
 The launcher reads configuration from `.env`. See `.env.example` for the full list of options. At minimum you should set `WEBSITE_URL`, `DYNMAP_URL`, and either `PACK_FEED_URL` or `PACK_ZIP_URL`. If neither is provided, the launcher falls back to downloading the latest pack from `https://hellasregion.com/download/latest`.
 
+- Set `BUNDLED_JAVA_PATH` to point at a Java 8 or 11 runtime (either a directory containing `bin/java[.exe]` or the executable itself). This overrides the packaged runtime, which can be useful if the bundled JRE has compatibility issues with Forge 1.16.5.
+
 ## Development
 
 ```bash
