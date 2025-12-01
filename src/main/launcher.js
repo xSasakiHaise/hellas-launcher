@@ -20,6 +20,10 @@ const MODPACK_DIR_NAME = 'modpack';
 const FORGE_DIR_NAME = 'forge';
 const VERSIONS_DIR_NAME = 'versions';
 
+// Pin the Forge version used by the modpack.
+// When you move the modpack to a new Forge, just change this constant.
+const MODPACK_FORGE_VERSION = '1.16.5-36.2.42';
+
 function getInstallSubpaths(installDir) {
   const modpackDir = path.join(installDir, MODPACK_DIR_NAME);
   const forgeDir = path.join(installDir, FORGE_DIR_NAME);
@@ -138,24 +142,12 @@ async function findGameDirectory(installDir) {
   return modpackDir;
 }
 
+// Previously this pulled from Forge's Maven metadata and picked "latest".
+// That was giving you 36.0.0. We hard-pin it to the modpack's Forge version.
 async function fetchLatestForgeVersion() {
   if (cachedForgeVersion) return cachedForgeVersion;
-
-  const response = await fetch(FORGE_METADATA_URL);
-  if (!response.ok) {
-    throw new Error(`Failed to resolve Forge metadata (${response.status})`);
-  }
-
-  const metadata = await response.text();
-  const matches = Array.from(metadata.matchAll(/<version>([^<]+)<\/version>/g)).map((match) => match[1]);
-  const forgeVersions = matches.filter((version) => version.startsWith(`${DEFAULT_MC_VERSION}-`));
-  if (!forgeVersions.length) {
-    throw new Error('No Forge versions found for Minecraft 1.16.5');
-  }
-
-  const latest = forgeVersions[forgeVersions.length - 1];
-  cachedForgeVersion = latest;
-  return latest;
+  cachedForgeVersion = MODPACK_FORGE_VERSION;
+  return cachedForgeVersion;
 }
 
 async function fetchJson(url, errorMessage) {
@@ -522,6 +514,7 @@ async function launchModpack({
   const log4jConfigPath = await ensureLog4jConfig(installDir, onStatus).catch((error) => {
     throw new Error(`Failed to prepare Log4j configuration: ${error.message}`);
   });
+
   const jvmArgs = buildJvmArgs(memorySettings, log4jConfigPath);
   const javaExecutable = resolveBundledJava();
   const { major: javaMajor, version: javaVersion } = await detectJavaVersion(javaExecutable);
@@ -547,37 +540,44 @@ async function launchModpack({
     onStatus({ message: `Using bundled Java runtime at ${javaExecutable}` });
   }
 
-const launchOptions = {
-  root: HELLAS_ROOT,
-  authorization: auth,
-  gameDirectory,
+  // Build the Forge profile id that matches the modpack:
+  // forgeVersion is "1.16.5-36.2.42" → profile folder is "1.16.5-forge-36.2.42"
+  const forgeProfileId = `${DEFAULT_MC_VERSION}-forge-${forgeVersion.split('-')[1]}`;
 
-  version: {
-    // vanilla ID that exists in Mojang's manifest
-    number: '1.16.5',
-    type: 'release',
+  // Respect custom RAM settings instead of hardcoded values
+  const memoryAllocation = calculateMemoryAllocation(memorySettings);
 
-    // name of your Forge profile folder under versions/
-    // e.g. <gameDirectory>/versions/1.16.5-forge-36.2.42/...
-    custom: '1.16.5-forge-36.2.42',
-  },
+  const launchOptions = {
+    // Root ".minecraft" where versions/libraries live
+    root: HELLAS_ROOT,
 
-  // keep using your resolved Forge installer / path
-  forge: resolvedForgeInstaller,
+    authorization: auth,
 
-  memory: {
-    max: '96486M',
-    min: '48243M',
-  },
+    // Use /Hellas/modpack as the in-game directory
+    overrides: {
+      gameDirectory
+    },
 
-  customArgs: jvmArgs,
+    version: {
+      // Vanilla version id from Mojang's manifest
+      number: DEFAULT_MC_VERSION,
+      type: 'release',
 
-  // if javaExecutable is literally "java" or "javaw", let MCLC resolve it,
-  // otherwise pass the full path (your bundled JRE8/11)
-  javaPath: ['java', 'javaw'].includes(javaExecutable)
-    ? undefined
-    : javaExecutable,
-};
+      // Pre-built Forge profile folder under versions/
+      // e.g. <HELLAS_ROOT>/versions/1.16.5-forge-36.2.42/...
+      custom: forgeProfileId
+    },
+
+    // Forge installer / profile to use (resolved earlier)
+    forge: resolvedForgeInstaller,
+
+    memory: memoryAllocation,
+    customArgs: jvmArgs,
+
+    // if javaExecutable is literally "java" or "javaw", let MCLC resolve it,
+    // otherwise pass the full path (your bundled JRE8/11)
+    javaPath: ['java', 'javaw'].includes(javaExecutable) ? undefined : javaExecutable
+  };
 
   // Ensure JVM arguments are always a non-null array to satisfy ForgeWrapper expectations.
   if (!Array.isArray(launchOptions.customArgs)) {
