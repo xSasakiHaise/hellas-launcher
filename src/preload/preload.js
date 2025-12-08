@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('hellas', {
   pollDeviceLogin: (payload) => ipcRenderer.invoke('hellas:poll-device-login', payload),
   performInstall: () => ipcRenderer.invoke('hellas:perform-install'),
   openExternal: (url) => ipcRenderer.invoke('hellas:open-external', url),
+  openInstallFolder: () => ipcRenderer.invoke('hellas:open-install-folder'),
   logout: () => ipcRenderer.invoke('hellas:logout'),
   close: () => ipcRenderer.invoke('hellas:close'),
   triggerUpdate: () => ipcRenderer.invoke('hellas:trigger-update'),
