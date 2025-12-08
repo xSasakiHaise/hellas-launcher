@@ -52,7 +52,7 @@
         }
       ],
       "icon": "assets/icons/icon.ico",
-      "artifactName": "Hellas Launcher.exe",
+      "artifactName": "Hellas Launcher.${ext}",
       "publisherName": "Hephaestus Forge"
     }
   },
