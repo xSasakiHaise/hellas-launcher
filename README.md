@@ -33,7 +33,8 @@ notepad .env
 ./build.ps1
 ```
 
-The resulting executable is placed in `dist/Hellas Launcher.exe`.
+The resulting executable is placed in `dist/Hellas Launcher.exe`. **Do not change this filename**—external tooling and update
+flows rely on the executable being named exactly `Hellas Launcher.exe`.
 
 ## Environment variables
 
