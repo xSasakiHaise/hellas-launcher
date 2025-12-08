@@ -548,6 +548,13 @@ ipcMain.handle('hellas:open-external', async (_event, targetUrl) => {
   }
 });
 
+ipcMain.handle('hellas:open-install-folder', async () => {
+  const dir = getInstallDir();
+  await fs.promises.mkdir(dir, { recursive: true });
+  await shell.openPath(dir);
+  return dir;
+});
+
 ipcMain.handle('hellas:toggle-maximize', async () => {
   if (!mainWindow || mainWindow.isDestroyed()) {
     return false;

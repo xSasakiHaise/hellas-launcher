@@ -134,8 +134,12 @@ function updateMemorySummary() {
   memoryActive.textContent = minText === '—' && maxText === '—' ? '—' : `${minText} – ${maxText}`;
 }
 
-function syncMemoryForm() {
+function syncMemoryForm(options = {}) {
   if (!memoryModeAuto || !memoryModeCustom || !memoryMaxInput || !memoryMinInput) return;
+
+  const { preserveInputs = false } = options;
+  const currentMax = memoryMaxInput.value;
+  const currentMin = memoryMinInput.value;
 
   const mode = memoryState.settings?.mode === 'custom' ? 'custom' : 'auto';
   memoryModeAuto.checked = mode === 'auto';
@@ -149,8 +153,17 @@ function syncMemoryForm() {
   const fallbackMax = memoryState.applied.maxMb || memoryState.system.recommendedMb;
   const fallbackMin = memoryState.applied.minMb || Math.max(1024, Math.floor(fallbackMax / 2));
 
-  memoryMaxInput.value = customEnabled ? memoryState.settings.maxMb || fallbackMax || '' : '';
-  memoryMinInput.value = customEnabled ? memoryState.settings.minMb || fallbackMin || '' : '';
+  if (!customEnabled) {
+    memoryMaxInput.value = '';
+    memoryMinInput.value = '';
+    return;
+  }
+
+  const targetMax = memoryState.settings.maxMb || fallbackMax || '';
+  const targetMin = memoryState.settings.minMb || fallbackMin || '';
+
+  memoryMaxInput.value = preserveInputs && currentMax !== '' ? currentMax : targetMax;
+  memoryMinInput.value = preserveInputs && currentMin !== '' ? currentMin : targetMin;
 }
 
 function setMemoryModal(open) {
@@ -187,7 +200,8 @@ function readMemoryForm() {
 function ensureCustomModeSelected() {
   if (memoryModeCustom && !memoryModeCustom.checked) {
     memoryModeCustom.checked = true;
-    syncMemoryForm();
+    memoryModeAuto.checked = false;
+    syncMemoryForm({ preserveInputs: true });
   }
 }
 
@@ -810,6 +824,15 @@ dropdownActions.forEach((button) => {
           } catch (error) {
             console.error('Failed to open log window', error);
             appendLaunchLog('Unable to open log window. Check debug.txt for details.', 'error');
+          }
+          break;
+        }
+        case 'open-install-folder': {
+          try {
+            await window.hellas.openInstallFolder();
+          } catch (error) {
+            console.error('Failed to open installation folder', error);
+            appendLaunchLog('Unable to open installation folder.', 'error');
           }
           break;
         }
