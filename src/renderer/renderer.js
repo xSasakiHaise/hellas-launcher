@@ -201,6 +201,7 @@ function ensureCustomModeSelected() {
   if (memoryModeCustom && !memoryModeCustom.checked) {
     memoryModeCustom.checked = true;
     memoryModeAuto.checked = false;
+    memoryState.settings = { ...memoryState.settings, mode: 'custom' };
     syncMemoryForm({ preserveInputs: true });
   }
 }
@@ -629,6 +630,8 @@ if (cancelMemoryButton) {
 if (memoryModeAuto && memoryModeCustom) {
   [memoryModeAuto, memoryModeCustom].forEach((radio) => {
     radio.addEventListener('change', () => {
+      const selectedMode = radio.value === 'custom' ? 'custom' : 'auto';
+      memoryState.settings = { ...memoryState.settings, mode: selectedMode };
       syncMemoryForm();
     });
   });
