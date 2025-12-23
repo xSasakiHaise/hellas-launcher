@@ -7,6 +7,7 @@ require('dotenv').config();
 const { HELLAS_ROOT, ensureDirectories } = require('./paths');
 
 const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall } = require('./update');
+const { reinstallBundledJava8 } = require('./runtime');
 const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
 const {
   launchModpack,
@@ -734,6 +735,34 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       sendUpdateProgress({ state: 'error', message: error.message || 'Reinstall failed.' });
       recordBehavior('reinstall-error', { message: error.message });
       logMessage('error', 'Reinstall failed', { message: error.message });
+      throw error;
+    }
+  });
+
+  ipcMain.handle('hellas:reinstall-java8', async () => {
+    recordBehavior('java8-reinstall-start', {});
+    sendInstallStatus({ message: 'Reinstalling bundled Java 8 runtime…' });
+    sendUpdateProgress({ state: 'downloading', progress: 0 });
+
+    try {
+      const result = await runUpdateTask((signal) =>
+        reinstallBundledJava8({ onStatus: sendInstallStatus, onProgress: sendUpdateProgress }, signal)
+      );
+
+      if (result.cancelled) {
+        sendUpdateProgress({ state: 'cancelled', message: 'Java 8 reinstall cancelled.' });
+        return { cancelled: true };
+      }
+
+      sendUpdateProgress({ state: 'complete', progress: 100 });
+      sendInstallStatus({ message: 'Java 8 reinstall finished.', level: 'success' });
+      recordBehavior('java8-reinstall-complete', { targetDir: result.targetDir });
+      return { targetDir: result.targetDir };
+    } catch (error) {
+      sendInstallStatus({ message: error.message || 'Java 8 reinstall failed.', level: 'error' });
+      sendUpdateProgress({ state: 'error', message: error.message || 'Java 8 reinstall failed.' });
+      recordBehavior('java8-reinstall-error', { message: error.message });
+      logMessage('error', 'Java 8 reinstall failed', { message: error.message });
       throw error;
     }
   });
