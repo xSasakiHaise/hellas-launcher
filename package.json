@@ -1,7 +1,7 @@
 {
   "name": "hellas-launcher",
   "version": "1.0.0",
-  "description": "Hellas Launcher MVP for Windows with dynamic background and one-click updates.",
+  "description": "Hellas Launcher",
   "main": "src/main/main.js",
   "author": "Hephaestus Forge",
   "license": "MIT",

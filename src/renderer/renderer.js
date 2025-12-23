@@ -839,6 +839,44 @@ dropdownActions.forEach((button) => {
           }
           break;
         }
+        case 'reinstall-java8': {
+          setUpdating(true);
+          updateProgressText.textContent = 'Reinstalling Java 8…';
+          let preserveProgress = false;
+          try {
+            const result = await window.hellas.reinstallJava8();
+            if (result?.cancelled) {
+              updateProgressText.textContent = 'Java 8 reinstall cancelled.';
+              updateProgress.hidden = false;
+              setUpdating(false, { resetText: false });
+              preserveProgress = true;
+              return;
+            }
+            updateProgressText.textContent = 'Java 8 reinstall finished.';
+            setUpdating(false);
+          } catch (error) {
+            console.error(error);
+            if (error?.cancelled || error?.message === 'Update cancelled') {
+              updateProgress.classList.remove('error');
+              updateProgressText.textContent = 'Java 8 reinstall cancelled.';
+              setUpdating(false, { resetText: false });
+              updateProgress.hidden = false;
+              preserveProgress = true;
+            } else {
+              updateProgress.classList.add('error');
+              updateProgressText.textContent = error.message || 'Java 8 reinstall failed';
+              setTimeout(() => {
+                setUpdating(false, { resetText: false });
+                updateProgress.hidden = false;
+              }, 2500);
+            }
+          } finally {
+            if (preserveProgress) {
+              updateProgress.hidden = false;
+            }
+          }
+          break;
+        }
         case 'reinstall': {
           setUpdating(true);
           updateProgressText.textContent = 'Reinstalling…';
