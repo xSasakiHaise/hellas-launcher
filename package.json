@@ -8,7 +8,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "cross-env NODE_ENV=development electron .",
-    "build": "cross-env NODE_ENV=production electron-builder --win portable",
+    "build": "node scripts/bundle-jre.js && cross-env NODE_ENV=production electron-builder --win portable",
     "lint": "eslint .",
     "test": "node --test"
   },
@@ -33,6 +33,10 @@
       "main": "src/main/main.js"
     },
     "extraResources": [
+      {
+        "from": "build-deps/jre8-win-x64.zip",
+        "to": "build-deps/jre8-win-x64.zip"
+      },
       {
         "from": "jre11-win64",
         "to": "jre11"
