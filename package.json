@@ -1,9 +1,9 @@
 {
   "name": "hellas-launcher",
-  "version": "0.1.0",
-  "description": "Hellas Launcher MVP for Windows with dynamic background and one-click updates.",
+  "version": "1.0.0",
+  "description": "Hellas Launcher",
   "main": "src/main/main.js",
-  "author": "Hellas Region",
+  "author": "Hephaestus Forge",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
@@ -20,8 +20,27 @@
       "src/renderer/**/*",
       "assets/**/*",
       "package.json",
-      "package-lock.json",
-      "!dist"
+      "!dist",
+      "!deconstructed",
+      "!legacy-reference",
+      "!wordpress"
+    ],
+    "extraResources": [
+      {
+        "from": "runtime-resources/jre8",
+        "to": "jre8",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "runtime-resources/jre11",
+        "to": "jre11",
+        "filter": ["**/*"]
+      },
+      {
+        "from": "runtime-resources/build-deps",
+        "to": "build-deps",
+        "filter": ["**/*"]
+      }
     ],
     "directories": {
       "buildResources": "assets/icons",
@@ -37,7 +56,7 @@
           "arch": ["x64"]
         }
       ],
-      "icon": "assets/icons/icon.png",
+      "icon": "assets/icons/icon.ico",
       "artifactName": "Hellas Launcher.exe"
     }
   },
@@ -45,6 +64,7 @@
     "adm-zip": "^0.5.10",
     "dotenv": "^16.4.5",
     "electron-store": "^8.2.0",
+    "minecraft-launcher-core": "^3.18.0",
     "node-fetch": "^2.6.12",
     "semver": "^7.6.0"
   },

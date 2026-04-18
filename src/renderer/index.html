@@ -12,25 +12,46 @@
         <source src="../../assets/bg/aetherveil-bg.webm" type="video/webm" />
         <source src="../../assets/bg/aetherveil-bg.mp4" type="video/mp4" />
       </video>
-      <img id="bg-fallback" src="../../assets/bg/aetherveil-fallback.png" alt="Aetherveil background" />
+      <img
+        id="bg-fallback"
+        src="../../assets/bg/aetherveil-fallback.png"
+        alt="Aetherveil background"
+      />
     </div>
 
     <div class="overlay">
       <header class="top-bar">
-        <button class="logo" id="logo-button" title="Open hellasregion.com">
-          <span class="logo-text">Hellas</span>
+        <button class="logo" id="logo-button" title="Open Hellasregion.com">
+          <img src="../../assets/icons/icon.png" alt="Hellas logo" />
         </button>
         <div class="menu">
-          <button id="account-button" class="icon-button" aria-haspopup="true" aria-expanded="false">
+          <button
+            id="account-button"
+            class="icon-button account-button"
+            aria-haspopup="true"
+            aria-expanded="false"
+          >
             <span class="icon account"></span>
+            <span class="account-name" id="account-username"></span>
           </button>
           <button id="menu-button" class="icon-button" aria-haspopup="true" aria-expanded="false">
             <span class="icon menu"></span>
+          </button>
+          <button id="maximize-button" class="icon-button window-button" title="Maximize">
+            <span aria-hidden="true">▢</span>
+          </button>
+          <button id="close-button" class="icon-button close-button" title="Close">
+            <span aria-hidden="true">×</span>
           </button>
           <nav id="dropdown" class="dropdown" aria-label="Launcher menu">
             <ul>
               <li><button data-action="dynmap">Dynmap</button></li>
               <li><button data-action="toggle-animation">Toggle Animation</button></li>
+              <li><button data-action="adjust-ram">Adjust RAM</button></li>
+              <li><button data-action="open-logs">Open Logs</button></li>
+              <li><button data-action="open-install-folder">Open installation folder</button></li>
+              <li><button data-action="reinstall-java8">Reinstall Java 8 only</button></li>
+              <li><button data-action="reinstall">Fresh reinstall</button></li>
               <li><button data-action="logout">Logout</button></li>
             </ul>
           </nav>
@@ -51,19 +72,134 @@
             <input type="checkbox" id="terms-checkbox" />
             <span>I have read and accept the Terms &amp; Conditions.</span>
           </label>
-          <button id="start-button" class="primary" disabled>
-            <span class="lock"></span>
-            <span class="label">Start</span>
-          </button>
-          <button id="update-button" class="secondary">
-            <span class="label">Update</span>
-          </button>
-          <div class="progress" id="update-progress" hidden>
-            <div class="bar" id="update-progress-bar"></div>
-            <span class="progress-text" id="update-progress-text"></span>
+          <div class="actions">
+            <button id="start-button" class="primary" disabled>
+              <span class="lock"></span>
+              <span class="label">Start</span>
+            </button>
+            <button id="cancel-launch-button" class="tertiary" hidden>Cancel launch</button>
+            <button id="update-button" class="secondary">
+              <span class="label">Update</span>
+            </button>
+            <button id="cancel-update-button" class="tertiary small" hidden>Cancel</button>
+            <div class="progress" id="update-progress" hidden>
+              <div class="bar" id="update-progress-bar"></div>
+              <span class="progress-text" id="update-progress-text"></span>
+            </div>
+            <div class="launch-log" id="launch-log" role="status" aria-live="polite"></div>
           </div>
         </section>
       </main>
+
+      <div class="footer">
+        <a
+          class="footer-link"
+          href="https://web.hephaestus-forge.cc/about/terms/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Terms &amp; Conditions
+        </a>
+        <span class="footer-meta">© 2025 Hephaestus Forge</span>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="account-modal" hidden>
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <h2>Sign in with Microsoft</h2>
+            <p class="subtitle">Verify your Minecraft ownership to continue.</p>
+          </div>
+          <button id="close-account-modal" class="icon-button close-button" title="Close login">
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
+        <div class="account-panel" id="account-panel" hidden>
+          <p class="account-note">
+            Sign in with your Microsoft account to verify Minecraft ownership. You’ll stay signed in on this
+            device.
+          </p>
+          <div class="account-actions">
+            <button id="login-button" class="secondary small">Sign in with Microsoft</button>
+            <span id="account-status" class="account-status" role="status"></span>
+          </div>
+          <div class="device-login" id="device-login" hidden>
+            <p>Enter this code at the Microsoft sign-in page:</p>
+            <div class="code-row">
+              <code id="user-code"></code>
+              <button id="copy-code" class="tertiary small" type="button">Copy</button>
+            </div>
+            <div class="device-actions">
+              <button id="open-login" class="secondary small" type="button">Open login.microsoft.com</button>
+              <span id="device-message" class="device-message" role="status"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="memory-modal" hidden>
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <h2>Adjust RAM</h2>
+            <p class="subtitle">Choose how much memory the launcher should allocate to Minecraft.</p>
+          </div>
+          <button id="close-memory-modal" class="icon-button close-button" title="Close memory settings">
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
+
+        <div class="memory-settings">
+          <div class="memory-summary">
+            <div>
+              <p class="label">Total system RAM</p>
+              <p id="memory-total" class="value"></p>
+            </div>
+            <div>
+              <p class="label">Recommended (75%)</p>
+              <p id="memory-recommended" class="value"></p>
+            </div>
+            <div>
+              <p class="label">Currently applied</p>
+              <p id="memory-active" class="value"></p>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Allocation mode</label>
+            <div class="memory-mode-options">
+              <label>
+                <input type="radio" name="memory-mode" value="auto" id="memory-mode-auto" />
+                Automatic (75% of system RAM)
+              </label>
+              <label>
+                <input type="radio" name="memory-mode" value="custom" id="memory-mode-custom" />
+                Custom allocation
+              </label>
+            </div>
+          </div>
+
+          <div class="memory-grid" id="memory-custom-fields">
+            <div class="field">
+              <label for="memory-max">Maximum RAM (MB)</label>
+              <input id="memory-max" type="number" min="1024" step="256" inputmode="numeric" />
+            </div>
+            <div class="field">
+              <label for="memory-min">Minimum RAM (MB)</label>
+              <input id="memory-min" type="number" min="1024" step="256" inputmode="numeric" />
+            </div>
+          </div>
+
+          <p class="memory-note">Values are capped to your system RAM. Minimum memory cannot exceed the maximum.</p>
+
+          <div class="modal-actions">
+            <button id="save-memory" class="primary small">Save</button>
+            <button id="cancel-memory" class="tertiary small">Cancel</button>
+          </div>
+        </div>
+      </div>
     </div>
 
     <script src="renderer.js"></script>

@@ -1,4 +1,18 @@
-assets/icons/*.png text diff working-tree-encoding=UTF-8
-assets/bg/*.mp4 text diff working-tree-encoding=UTF-8
-assets/bg/*.webm text diff working-tree-encoding=UTF-8
-assets/bg/*.png text diff working-tree-encoding=UTF-8
+* text=auto
+
+*.png binary
+*.ico binary
+*.jpg binary
+*.jpeg binary
+*.mp4 binary
+*.webm binary
+*.zip binary
+*.jar binary
+*.dll binary
+*.exe binary
+*.dat binary
+*.pak binary
+*.bin binary
+*.lib binary
+*.jmod binary
+*.ctsym binary
