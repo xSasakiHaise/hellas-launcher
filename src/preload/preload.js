@@ -20,6 +20,7 @@ contextBridge.exposeInMainWorld('hellas', {
   cancelUpdate: () => ipcRenderer.invoke('hellas:cancel-update'),
   freshReinstall: () => ipcRenderer.invoke('hellas:fresh-reinstall'),
   reinstallJava8: () => ipcRenderer.invoke('hellas:reinstall-java8'),
+  reinstallProfileJava: () => ipcRenderer.invoke('hellas:reinstall-profile-java'),
   getInstallation: () => ipcRenderer.invoke('hellas:get-installation'),
   launchGame: () => ipcRenderer.invoke('hellas:launch-game'),
   cancelLaunch: () => ipcRenderer.invoke('hellas:cancel-launch'),

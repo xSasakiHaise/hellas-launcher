@@ -7,7 +7,7 @@ require('dotenv').config();
 const { HELLAS_ROOT, ensureDirectories } = require('./paths');
 
 const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall, hasSource } = require('./update');
-const { reinstallBundledJava8 } = require('./runtime');
+const { reinstallBundledJava, reinstallBundledJava8 } = require('./runtime');
 const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
 const {
   launchModpack,
@@ -915,6 +915,41 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       sendUpdateProgress({ state: 'error', message: error.message || 'Java 8 reinstall failed.' });
       recordBehavior('java8-reinstall-error', { message: error.message });
       logMessage('error', 'Java 8 reinstall failed', { message: error.message });
+      throw error;
+    }
+  });
+
+  ipcMain.handle('hellas:reinstall-profile-java', async () => {
+    const profile = getActiveProfile();
+    const javaMajor = profile.java?.major || 8;
+    const label = `Java ${javaMajor}`;
+    recordBehavior('profile-java-reinstall-start', { profileId: profile.id, javaMajor });
+    sendInstallStatus({ message: `Reinstalling bundled ${label} runtime…` });
+    sendUpdateProgress({ state: 'downloading', progress: 0 });
+
+    try {
+      const result = await runUpdateTask((signal) =>
+        reinstallBundledJava({ major: javaMajor, onStatus: sendInstallStatus, onProgress: sendUpdateProgress }, signal)
+      );
+
+      if (result.cancelled) {
+        sendUpdateProgress({ state: 'cancelled', message: `${label} reinstall cancelled.` });
+        return { cancelled: true, javaMajor };
+      }
+
+      sendUpdateProgress({ state: 'complete', progress: 100 });
+      sendInstallStatus({ message: `${label} reinstall finished.`, level: 'success' });
+      recordBehavior('profile-java-reinstall-complete', {
+        profileId: profile.id,
+        javaMajor,
+        targetDir: result.targetDir
+      });
+      return { targetDir: result.targetDir, javaMajor };
+    } catch (error) {
+      sendInstallStatus({ message: error.message || `${label} reinstall failed.`, level: 'error' });
+      sendUpdateProgress({ state: 'error', message: error.message || `${label} reinstall failed.` });
+      recordBehavior('profile-java-reinstall-error', { profileId: profile.id, javaMajor, message: error.message });
+      logMessage('error', `${label} reinstall failed`, { profileId: profile.id, error: error.message });
       throw error;
     }
   });

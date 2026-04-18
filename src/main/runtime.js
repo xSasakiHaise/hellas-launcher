@@ -5,8 +5,23 @@ const AdmZip = require('adm-zip');
 const fetch = require('node-fetch');
 const { app } = require('electron');
 
-const JAVA8_DOWNLOAD_URL =
-  'https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u472-b08/OpenJDK8U-jre_x64_windows_hotspot_8u472b08.zip';
+const JAVA_RUNTIMES = {
+  8: {
+    label: 'Java 8',
+    targetDirName: 'jre8',
+    zipEnv: 'JAVA8_ZIP_PATH',
+    zipFileName: 'jre8-win-x64.zip',
+    downloadUrl:
+      'https://github.com/adoptium/temurin8-binaries/releases/download/jdk8u472-b08/OpenJDK8U-jre_x64_windows_hotspot_8u472b08.zip'
+  },
+  21: {
+    label: 'Java 21',
+    targetDirName: 'jre21',
+    zipEnv: 'JAVA21_ZIP_PATH',
+    zipFileName: 'jre21-win-x64.zip',
+    downloadUrl: 'https://api.adoptium.net/v3/binary/latest/21/ga/windows/x64/jre/hotspot/normal/eclipse'
+  }
+};
 
 function asCancellationError(message = 'Update cancelled by user.') {
   const error = new Error(message);
@@ -21,15 +36,25 @@ function ensureNotCancelled(signal) {
   }
 }
 
-function resolveJava8ZipPath() {
-  const envOverride = (process.env.JAVA8_ZIP_PATH || '').trim();
+function resolveJavaRuntimeConfig(major) {
+  const runtime = JAVA_RUNTIMES[Number(major)];
+  if (!runtime) {
+    throw new Error(`Java ${major} reinstall is not configured.`);
+  }
+
+  return runtime;
+}
+
+function resolveJavaZipPath(major) {
+  const runtime = resolveJavaRuntimeConfig(major);
+  const envOverride = (process.env[runtime.zipEnv] || '').trim();
   if (envOverride) {
     return envOverride;
   }
 
   const candidateRoots = [app.getAppPath(), path.dirname(app.getAppPath()), process.resourcesPath];
   for (const root of candidateRoots) {
-    const candidate = path.join(root, 'build-deps', 'jre8-win-x64.zip');
+    const candidate = path.join(root, 'build-deps', runtime.zipFileName);
     if (fs.existsSync(candidate)) {
       return candidate;
     }
@@ -38,13 +63,14 @@ function resolveJava8ZipPath() {
   return null;
 }
 
-async function downloadJava8Zip({ onProgress = () => {} } = {}, abortSignal) {
-  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'hellas-java8-download-'));
-  const zipPath = path.join(tempRoot, 'jre8-win-x64.zip');
+async function downloadJavaZip(major, { onProgress = () => {} } = {}, abortSignal) {
+  const runtime = resolveJavaRuntimeConfig(major);
+  const tempRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), `hellas-java${major}-download-`));
+  const zipPath = path.join(tempRoot, runtime.zipFileName);
 
-  const response = await fetch(JAVA8_DOWNLOAD_URL, { signal: abortSignal });
+  const response = await fetch(runtime.downloadUrl, { signal: abortSignal });
   if (!response.ok) {
-    throw new Error(`Failed to download Java 8 runtime (HTTP ${response.status}).`);
+    throw new Error(`Failed to download ${runtime.label} runtime (HTTP ${response.status}).`);
   }
 
   const total = Number(response.headers.get('content-length')) || 0;
@@ -96,27 +122,28 @@ async function copyDirectoryContents(sourceDir, targetDir) {
   }
 }
 
-async function reinstallBundledJava8({ onStatus = () => {}, onProgress = () => {} } = {}, abortSignal) {
-  const bundledZipPath = resolveJava8ZipPath();
+async function reinstallBundledJava({ major = 8, onStatus = () => {}, onProgress = () => {} } = {}, abortSignal) {
+  const runtime = resolveJavaRuntimeConfig(major);
+  const bundledZipPath = resolveJavaZipPath(major);
 
-  const targetDir = path.join(process.resourcesPath, 'jre8');
+  const targetDir = path.join(process.resourcesPath, runtime.targetDirName);
   let tempDir = null;
   let zipPath = bundledZipPath;
   let downloadTempRoot = null;
 
   try {
     ensureNotCancelled(abortSignal);
-    onStatus({ message: 'Reinstalling bundled Java 8 runtime…' });
+    onStatus({ message: `Reinstalling bundled ${runtime.label} runtime…` });
 
     if (!zipPath) {
-      onStatus({ message: 'Downloading Java 8 runtime…' });
+      onStatus({ message: `Downloading ${runtime.label} runtime…` });
       onProgress({ state: 'downloading', progress: 10 });
-      const download = await downloadJava8Zip({ onProgress }, abortSignal);
+      const download = await downloadJavaZip(major, { onProgress }, abortSignal);
       downloadTempRoot = download.tempRoot;
       zipPath = download.zipPath;
     }
 
-    tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'hellas-java8-'));
+    tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), `hellas-java${major}-`));
     const extractDir = path.join(tempDir, 'extracted');
     const zip = new AdmZip(zipPath);
     zip.extractAllTo(extractDir, true);
@@ -139,9 +166,14 @@ async function reinstallBundledJava8({ onStatus = () => {}, onProgress = () => {
     }
   }
 
-  return { targetDir };
+  return { targetDir, major: Number(major) };
+}
+
+async function reinstallBundledJava8(options = {}, abortSignal) {
+  return reinstallBundledJava({ ...options, major: 8 }, abortSignal);
 }
 
 module.exports = {
+  reinstallBundledJava,
   reinstallBundledJava8
 };

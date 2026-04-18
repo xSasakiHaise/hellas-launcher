@@ -21,6 +21,7 @@ The Desktop executable at `C:\Users\raehr\Desktop\Hellas Launcher.exe` was copie
 - Each profile stores its own installed version, last known version, RAM settings, Java expectation, and additional mod links.
 - The updater can still use the old ZIP feed, but it can also read a new WordPress manifest and download managed mods one file at a time.
 - Player-added mod links are stored per profile and downloaded after the official mod list.
+- The selected profile can reinstall its required bundled Java runtime. MC 1.16.5 uses Java 8; MC 1.21.1 uses Java 21.
 
 The WordPress companion plugin lives in:
 
@@ -57,6 +58,7 @@ Important variables:
 - `PACK_MANIFEST_URL`, `PACK_FEED_URL`, or `PACK_ZIP_URL`
 - `PACK_MANIFEST_URL_1_16_5` / `PACK_MANIFEST_URL_1_21_1` for profile-specific sources
 - `JAVA8_ZIP_PATH`
+- `JAVA21_ZIP_PATH`
 - `JAVA8_PATH` / `JAVA21_PATH` for explicit Java executables
 - `MC_MEMORY_MIN`
 - `MC_MEMORY_MAX`

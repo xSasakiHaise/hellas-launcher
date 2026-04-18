@@ -42,6 +42,7 @@ const memoryTotal = document.getElementById('memory-total');
 const memoryRecommended = document.getElementById('memory-recommended');
 const memoryActive = document.getElementById('memory-active');
 const profileSelect = document.getElementById('profile-select');
+const reinstallProfileJavaButton = document.getElementById('reinstall-profile-java-button');
 const modsModal = document.getElementById('mods-modal');
 const closeModsModal = document.getElementById('close-mods-modal');
 const saveAdditionalModsButton = document.getElementById('save-additional-mods');
@@ -197,6 +198,14 @@ function syncProfileSelect() {
     option.selected = profile.id === activeProfileId;
     profileSelect.appendChild(option);
   });
+}
+
+function updateProfileJavaMenuLabel() {
+  if (!reinstallProfileJavaButton) return;
+  const javaMajor = launcherState.activeProfile?.javaMajor || launcherState.activeProfile?.java?.major;
+  reinstallProfileJavaButton.textContent = javaMajor
+    ? `Reinstall Java ${javaMajor} for selected version`
+    : 'Reinstall selected Java';
 }
 
 function setModsModal(open) {
@@ -536,6 +545,7 @@ async function refreshState() {
   }
   applyMemoryState(state.memory || {});
   syncProfileSelect();
+  updateProfileJavaMenuLabel();
   updateAccountUi();
   updateStartButtonState();
   updateInstallLabels();
@@ -935,6 +945,46 @@ dropdownActions.forEach((button) => {
           } catch (error) {
             console.error('Failed to open installation folder', error);
             appendLaunchLog('Unable to open installation folder.', 'error');
+          }
+          break;
+        }
+        case 'reinstall-profile-java': {
+          const javaMajor = launcherState.activeProfile?.javaMajor || '';
+          const label = javaMajor ? `Java ${javaMajor}` : 'selected Java';
+          setUpdating(true);
+          updateProgressText.textContent = `Reinstalling ${label}…`;
+          let preserveProgress = false;
+          try {
+            const result = await window.hellas.reinstallProfileJava();
+            if (result?.cancelled) {
+              updateProgressText.textContent = `${label} reinstall cancelled.`;
+              updateProgress.hidden = false;
+              setUpdating(false, { resetText: false });
+              preserveProgress = true;
+              return;
+            }
+            updateProgressText.textContent = `${label} reinstall finished.`;
+            setUpdating(false);
+          } catch (error) {
+            console.error(error);
+            if (error?.cancelled || error?.message === 'Update cancelled') {
+              updateProgress.classList.remove('error');
+              updateProgressText.textContent = `${label} reinstall cancelled.`;
+              setUpdating(false, { resetText: false });
+              updateProgress.hidden = false;
+              preserveProgress = true;
+            } else {
+              updateProgress.classList.add('error');
+              updateProgressText.textContent = error.message || `${label} reinstall failed`;
+              setTimeout(() => {
+                setUpdating(false, { resetText: false });
+                updateProgress.hidden = false;
+              }, 2500);
+            }
+          } finally {
+            if (preserveProgress) {
+              updateProgress.hidden = false;
+            }
           }
           break;
         }
