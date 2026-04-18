@@ -1,29 +1,28 @@
 # Hellas Launcher Manifest
 
-WordPress plugin for hosting Hellas Launcher update metadata.
+WordPress plugin for hosting the Hellas Launcher MC 1.21.1 update metadata.
+
+MC 1.16.5 is intentionally not handled here. Keep the old WordPress plugin in charge of the legacy 1.16.5 update feed and compact ZIP endpoint.
 
 ## Endpoints
 
-- `/wp-json/hellas-launcher/v1/manifest` returns the full multi-profile manifest.
-- `/wp-json/hellas-launcher/v1/manifest/mc-1.16.5` returns one profile.
-- `/wp-json/hellas-launcher/v1/latest` returns the old launcher `{ version, url, sha256 }` response.
-- `/download/launcher/latest/compact` returns the same old launcher response through a rewrite rule.
+- `/wp-json/hellas-launcher-1211/v1/manifest` returns the MC 1.21.1 manifest.
+- `/wp-json/hellas-launcher-1211/v1/manifest/mc-1.21.1` returns the MC 1.21.1 profile.
+- `/wp-json/hellas-launcher-1211/v1/manifest/1.21.1` returns the same MC 1.21.1 profile.
 
 ## Manifest Shape
 
-Each profile can provide a legacy archive URL and/or individual managed mod links:
+The profile can provide individual managed mod links:
 
 ```json
 {
   "schemaVersion": 2,
   "profiles": {
-    "mc-1.16.5": {
-      "minecraftVersion": "1.16.5",
-      "forgeVersion": "1.16.5-36.2.42",
-      "javaMajor": 8,
+    "mc-1.21.1": {
+      "minecraftVersion": "1.21.1",
+      "forgeVersion": "1.21.1-52.1.0",
+      "javaMajor": 21,
       "version": "1.0.0",
-      "url": "https://example.com/legacy-modpack.zip",
-      "sha256": "",
       "mods": [
         {
           "id": "example-mod",
@@ -37,4 +36,4 @@ Each profile can provide a legacy archive URL and/or individual managed mod link
 }
 ```
 
-The old compatibility endpoints use the MC 1.16.5 `url`, `version`, and `sha256` fields.
+Configure the launcher with `PACK_MANIFEST_URL_1_21_1=https://example.com/wp-json/hellas-launcher-1211/v1/manifest`.
