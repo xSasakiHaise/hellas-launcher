@@ -14,6 +14,22 @@ The Desktop executable at `C:\Users\raehr\Desktop\Hellas Launcher.exe` was copie
 - RAM allocation settings.
 - Update cancelation, fresh reinstall, Java 8 reinstall, install-folder opening, and launcher logs.
 
+## Added Update/Profile Layer
+
+- MC 1.16.5 remains the legacy default and keeps `%APPDATA%\Hellas\modpack`.
+- MC 1.21.1 uses `%APPDATA%\Hellas\profiles\mc-1.21.1\modpack`.
+- Each profile stores its own installed version, last known version, RAM settings, Java expectation, and additional mod links.
+- The updater can still use the old ZIP feed, but it can also read a new WordPress manifest and download managed mods one file at a time.
+- Player-added mod links are stored per profile and downloaded after the official mod list.
+
+The WordPress companion plugin lives in:
+
+```text
+wordpress/hellas-launcher-manifest
+```
+
+It exposes `/wp-json/hellas-launcher/v1/manifest` for the new launcher and keeps `/download/launcher/latest/compact` compatible with older launchers that still expect `{ "version", "url", "sha256" }`.
+
 ## Runtime Resources
 
 The Desktop build bundled runtime files outside `app.asar`. They are restored under:
@@ -38,12 +54,14 @@ notepad .env
 Important variables:
 
 - `MICROSOFT_CLIENT_ID`
-- `PACK_FEED_URL` or `PACK_ZIP_URL`
+- `PACK_MANIFEST_URL`, `PACK_FEED_URL`, or `PACK_ZIP_URL`
+- `PACK_MANIFEST_URL_1_16_5` / `PACK_MANIFEST_URL_1_21_1` for profile-specific sources
 - `JAVA8_ZIP_PATH`
+- `JAVA8_PATH` / `JAVA21_PATH` for explicit Java executables
 - `MC_MEMORY_MIN`
 - `MC_MEMORY_MAX`
 
-If no update URL is set, the launcher falls back to the built-in compact pack URL used by `1.0.0`.
+If no update URL is set, the MC 1.16.5 profile falls back to the built-in compact pack URL used by `1.0.0`. Newer profiles require a configured manifest/feed/source URL.
 
 ## Development
 

@@ -6,7 +6,7 @@ const semver = require('semver');
 require('dotenv').config();
 const { HELLAS_ROOT, ensureDirectories } = require('./paths');
 
-const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall } = require('./update');
+const { resolveUpdateSource, downloadAndExtractUpdate, fetchFeedManifest, freshReinstall, hasSource } = require('./update');
 const { reinstallBundledJava8 } = require('./runtime');
 const { requestDeviceCode, pollDeviceCode, loginWithRefreshToken } = require('./auth');
 const {
@@ -18,6 +18,7 @@ const {
   buildMemoryPlan
 } = require('./launcher');
 const { initLogger, logMessage, getLauncherLogPath, readLauncherLog } = require('./logger');
+const { LEGACY_PROFILE_ID, getProfile, getProfiles, getProfileSummary, normalizeProfileId } = require('./profiles');
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 let mainWindow;
@@ -70,6 +71,8 @@ function createStore() {
     termsAccepted: false,
     animationEnabled: process.env.AETHERVEIL_ANIM_ENABLED !== 'false',
     installDir: HELLAS_ROOT,
+    activeProfileId: LEGACY_PROFILE_ID,
+    profileStates: {},
     installedVersion: '',
     lastKnownVersion: '',
     memory: { mode: 'auto', minMb: null, maxMb: null },
@@ -87,13 +90,93 @@ function createStore() {
   }
 }
 
-function getInstallDir() {
-  // Enforce the Hellas layout at %APPDATA%/Hellas with the modpack stored in
-  // the /modpack folder. Persist the value in the store so subsequent runs stay
-  // consistent, but do not allow overrides.
-  store.set('installDir', HELLAS_ROOT);
+function applyProfileOverrides(profile) {
+  const state = store.get(`profileStates.${profile.id}`) || {};
+  const javaMajor = Number(state.javaMajor);
+  const overriddenJava = Number.isFinite(javaMajor) && javaMajor > 0
+    ? { ...profile.java, major: javaMajor, allowedMajors: [javaMajor] }
+    : { ...profile.java };
+
+  return {
+    ...profile,
+    forgeVersion: state.forgeVersion || profile.forgeVersion,
+    java: overriddenJava
+  };
+}
+
+function getActiveProfile() {
+  const activeProfileId = normalizeProfileId(store.get('activeProfileId'));
+  if (activeProfileId !== store.get('activeProfileId')) {
+    store.set('activeProfileId', activeProfileId);
+  }
+  return applyProfileOverrides(getProfile(activeProfileId));
+}
+
+function isLegacyProfile(profile) {
+  return profile.id === LEGACY_PROFILE_ID;
+}
+
+function getProfileState(profile) {
+  return store.get(`profileStates.${profile.id}`) || {};
+}
+
+function setProfileStateValue(profile, key, value) {
+  store.set(`profileStates.${profile.id}.${key}`, value);
+}
+
+function getProfileVersion(profile, key) {
+  if (isLegacyProfile(profile)) {
+    return store.get(key) || '';
+  }
+
+  return getProfileState(profile)[key] || '';
+}
+
+function setProfileVersion(profile, key, value) {
+  if (isLegacyProfile(profile)) {
+    store.set(key, value || '');
+  }
+  setProfileStateValue(profile, key, value || '');
+}
+
+function rememberManifestProfileDetails(profile, manifest = {}) {
+  if (manifest.forgeVersion) {
+    setProfileStateValue(profile, 'forgeVersion', manifest.forgeVersion);
+  }
+  if (manifest.javaMajor) {
+    setProfileStateValue(profile, 'javaMajor', manifest.javaMajor);
+  }
+}
+
+function getAdditionalMods(profile = getActiveProfile()) {
+  const links = getProfileState(profile).additionalMods || [];
+  return Array.isArray(links) ? links.filter((link) => typeof link === 'string' && link.trim()) : [];
+}
+
+function setAdditionalMods(profile, links) {
+  const normalized = Array.isArray(links)
+    ? links.map((link) => String(link || '').trim()).filter(Boolean)
+    : [];
+  setProfileStateValue(profile, 'additionalMods', Array.from(new Set(normalized)));
+  return getAdditionalMods(profile);
+}
+
+function getInstallDir(profile = getActiveProfile()) {
+  if (isLegacyProfile(profile)) {
+    // Enforce the Hellas layout at %APPDATA%/Hellas with the modpack stored in
+    // the /modpack folder. Persist the value in the store so subsequent runs stay
+    // consistent, but do not allow overrides.
+    store.set('installDir', HELLAS_ROOT);
+    ensureDirectories(HELLAS_ROOT);
+    return HELLAS_ROOT;
+  }
+
   ensureDirectories(HELLAS_ROOT);
-  return HELLAS_ROOT;
+  fs.mkdirSync(profile.installDir, { recursive: true });
+  fs.mkdirSync(profile.instanceDir, { recursive: true });
+  fs.mkdirSync(profile.forgeDir, { recursive: true });
+  fs.mkdirSync(profile.versionsDir, { recursive: true });
+  return profile.installDir;
 }
 
 function getAccount() {
@@ -120,18 +203,25 @@ function normalizeMemorySettings(settings = {}) {
   };
 }
 
-function getMemorySettings() {
-  return normalizeMemorySettings(store.get('memory') || {});
+function getMemorySettings(profile = getActiveProfile()) {
+  if (isLegacyProfile(profile)) {
+    return normalizeMemorySettings(store.get('memory') || {});
+  }
+
+  return normalizeMemorySettings(getProfileState(profile).memory || {});
 }
 
-function setMemorySettings(settings) {
+function setMemorySettings(settings, profile = getActiveProfile()) {
   const normalized = normalizeMemorySettings(settings);
-  store.set('memory', normalized);
+  if (isLegacyProfile(profile)) {
+    store.set('memory', normalized);
+  }
+  setProfileStateValue(profile, 'memory', normalized);
   return normalized;
 }
 
-function getMemoryState() {
-  const settings = getMemorySettings();
+function getMemoryState(profile = getActiveProfile()) {
+  const settings = getMemorySettings(profile);
   const plan = buildMemoryPlan(settings);
 
   return {
@@ -200,8 +290,8 @@ async function attemptRestoreAccount() {
   }
 }
 
-async function getInstallationState() {
-  const dir = getInstallDir();
+async function getInstallationState(profile = getActiveProfile()) {
+  const dir = getInstallDir(profile);
   const installDirExists = fs.existsSync(dir);
   let requirements = { minecraft: false, forge: false, modpack: false };
   let forgeVersion = null;
@@ -209,10 +299,11 @@ async function getInstallationState() {
   let detectedModpackVersion = null;
   let modpackErrors = [];
   let searchedModDirectories = [];
-  const expectedModpackVersion = store.get('lastKnownVersion') || store.get('installedVersion') || null;
+  const expectedModpackVersion =
+    getProfileVersion(profile, 'lastKnownVersion') || getProfileVersion(profile, 'installedVersion') || null;
 
   try {
-    const check = await checkLaunchRequirements(dir, expectedModpackVersion);
+    const check = await checkLaunchRequirements(dir, expectedModpackVersion, profile);
     requirements = check.requirements;
     forgeVersion = check.forgeVersion;
     minecraftVersion = check.minecraftVersion;
@@ -224,8 +315,8 @@ async function getInstallationState() {
     logMessage('error', 'Installation readiness check failed', { error: error.message });
   }
 
-  const installedVersion = store.get('installedVersion') || '';
-  const lastKnownVersion = store.get('lastKnownVersion') || '';
+  const installedVersion = getProfileVersion(profile, 'installedVersion') || '';
+  const lastKnownVersion = getProfileVersion(profile, 'lastKnownVersion') || '';
   const resolvedInstalledVersion =
     installedVersion ||
     detectedModpackVersion ||
@@ -234,7 +325,7 @@ async function getInstallationState() {
     (requirements.modpack ? 'unversioned' : '');
 
   if (detectedModpackVersion && detectedModpackVersion !== installedVersion) {
-    store.set('installedVersion', detectedModpackVersion);
+    setProfileVersion(profile, 'installedVersion', detectedModpackVersion);
   }
   // Consider the installation launch-ready once the modpack content is present; the
   // launcher can download missing Minecraft/Forge files on demand during launch.
@@ -242,6 +333,8 @@ async function getInstallationState() {
 
   return {
     installDir: dir,
+    profileId: profile.id,
+    profile: getProfileSummary(profile),
     installDirExists,
     isInstalled: readyToLaunch,
     installedVersion: resolvedInstalledVersion || installedVersion,
@@ -413,24 +506,37 @@ app.on('before-quit', () => {
 });
 
 ipcMain.handle('hellas:get-state', async () => {
-  const installation = await getInstallationState();
-  const updateSource = resolveUpdateSource();
+  const activeProfile = getActiveProfile();
+  const installation = await getInstallationState(activeProfile);
+  const updateSource = resolveUpdateSource(activeProfile);
   let preferredVersion = installation.lastKnownVersion;
 
-  if (updateSource) {
+  if (hasSource(updateSource)) {
     if (updateSource.type === 'feed') {
       try {
-        const manifest = await fetchFeedManifest(updateSource.feedUrl);
+        const manifest = await fetchFeedManifest(updateSource.feedUrl, activeProfile);
+        rememberManifestProfileDetails(activeProfile, manifest);
         if (manifest.version) {
           preferredVersion = manifest.version;
-          store.set('lastKnownVersion', manifest.version);
+          setProfileVersion(activeProfile, 'lastKnownVersion', manifest.version);
         }
       } catch (error) {
         console.warn('Failed to fetch update feed', error);
       }
+    } else if (updateSource.type === 'manifest') {
+      try {
+        const manifest = await fetchFeedManifest(updateSource.manifestUrl, activeProfile);
+        rememberManifestProfileDetails(activeProfile, manifest);
+        if (manifest.version) {
+          preferredVersion = manifest.version;
+          setProfileVersion(activeProfile, 'lastKnownVersion', manifest.version);
+        }
+      } catch (error) {
+        console.warn('Failed to fetch update manifest', error);
+      }
     } else if (updateSource.version) {
       preferredVersion = updateSource.version;
-      store.set('lastKnownVersion', updateSource.version);
+      setProfileVersion(activeProfile, 'lastKnownVersion', updateSource.version);
     }
   }
 
@@ -451,13 +557,16 @@ ipcMain.handle('hellas:get-state', async () => {
   return {
     websiteUrl: process.env.WEBSITE_URL || 'https://hellasregion.com',
     dynmapUrl: process.env.DYNMAP_URL || 'https://map.pixelmon-server.com',
+    profiles: getProfiles().map(getProfileSummary),
+    activeProfile: getProfileSummary(activeProfile),
+    additionalMods: getAdditionalMods(activeProfile),
     installation,
     account: getAccount(),
     termsAccepted: store.get('termsAccepted'),
     animationEnabled: store.get('animationEnabled'),
-    memory: getMemoryState(),
+    memory: getMemoryState(activeProfile),
     update: {
-      hasUpdateSource: Boolean(updateSource),
+      hasUpdateSource: hasSource(updateSource),
       preferredVersion,
       available: updateAvailable
     }
@@ -474,11 +583,31 @@ ipcMain.handle('hellas:set-animation', async (_event, value) => {
   return store.get('animationEnabled');
 });
 
-ipcMain.handle('hellas:get-memory-settings', async () => getMemoryState());
+ipcMain.handle('hellas:get-memory-settings', async () => getMemoryState(getActiveProfile()));
 
 ipcMain.handle('hellas:set-memory-settings', async (_event, settings) => {
-  setMemorySettings(settings);
-  return getMemoryState();
+  const activeProfile = getActiveProfile();
+  setMemorySettings(settings, activeProfile);
+  return getMemoryState(activeProfile);
+});
+
+ipcMain.handle('hellas:set-active-profile', async (_event, profileId) => {
+  const nextProfileId = normalizeProfileId(profileId);
+  store.set('activeProfileId', nextProfileId);
+  const profile = getActiveProfile();
+  return {
+    activeProfile: getProfileSummary(profile),
+    installation: await getInstallationState(profile),
+    memory: getMemoryState(profile),
+    additionalMods: getAdditionalMods(profile)
+  };
+});
+
+ipcMain.handle('hellas:get-additional-mods', async () => getAdditionalMods(getActiveProfile()));
+
+ipcMain.handle('hellas:set-additional-mods', async (_event, links) => {
+  const profile = getActiveProfile();
+  return setAdditionalMods(profile, links);
 });
 
 ipcMain.handle('hellas:start-device-login', async () => requestDeviceCode());
@@ -499,22 +628,26 @@ ipcMain.handle('hellas:poll-device-login', async (_event, payload) => {
 });
 
   ipcMain.handle('hellas:perform-install', async () => {
-    const dir = getInstallDir();
-    const updateSource = resolveUpdateSource();
-    if (!updateSource || !updateSource.url) {
+    const profile = getActiveProfile();
+    const dir = getInstallDir(profile);
+    const updateSource = resolveUpdateSource(profile);
+    if (!hasSource(updateSource)) {
       sendInstallStatus({ message: 'Update source is not configured.', level: 'error' });
       throw new Error('Update source is not configured.');
     }
 
     await fs.promises.mkdir(dir, { recursive: true });
 
-    recordBehavior('install-start', { dir, updateSource: updateSource.url });
+    recordBehavior('install-start', { dir, profileId: profile.id, updateSource: updateSource.sourceUrl || updateSource.url });
 
     sendInstallStatus({ message: `Preparing installation into ${dir}` });
     sendUpdateProgress({ state: 'downloading', progress: 0 });
     try {
       const result = await runUpdateTask((signal) =>
-        downloadAndExtractUpdate(updateSource, dir, sendUpdateProgress, signal)
+        downloadAndExtractUpdate(updateSource, dir, sendUpdateProgress, signal, {
+          profile,
+          additionalMods: getAdditionalMods(profile)
+        })
       );
 
       if (result.cancelled) {
@@ -523,17 +656,19 @@ ipcMain.handle('hellas:poll-device-login', async (_event, payload) => {
       }
 
       if (result.version) {
-        store.set('installedVersion', result.version);
-        store.set('lastKnownVersion', result.version);
+        setProfileVersion(profile, 'installedVersion', result.version);
+        setProfileVersion(profile, 'lastKnownVersion', result.version);
       }
+      rememberManifestProfileDetails(profile, result);
 
+      const runtimeProfile = applyProfileOverrides(profile);
       sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
-      await ensureBaseRuntime({ installDir: dir, onStatus: sendInstallStatus });
+      await ensureBaseRuntime({ installDir: dir, profile: runtimeProfile, onStatus: sendInstallStatus });
 
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Installation completed successfully.', level: 'success' });
       recordBehavior('install-complete', { dir, version: result.version || null });
-      return { installation: await getInstallationState(), version: result.version || null };
+      return { installation: await getInstallationState(runtimeProfile), version: result.version || null };
     } catch (error) {
       sendInstallStatus({ message: error.message || 'Installation failed.', level: 'error' });
       sendUpdateProgress({ state: 'error', message: error.message || 'Installation failed.' });
@@ -593,13 +728,15 @@ ipcMain.handle('hellas:logout', async () => {
       throw new Error('Please log in with your Minecraft account before launching.');
     }
 
-  const installDir = getInstallDir();
-  const installation = await getInstallationState();
+  const profile = getActiveProfile();
+  const installDir = getInstallDir(profile);
+  const installation = await getInstallationState(profile);
   const expectedModpackVersion =
     installation.lastKnownVersion || installation.installedVersion || null;
 
   recordBehavior('launch-attempt', {
     installDir,
+    profileId: profile.id,
     expectedModpackVersion,
     account: account.username
   });
@@ -632,9 +769,10 @@ ipcMain.handle('hellas:logout', async () => {
       sendLaunchStatus({ message: `Resolving missing components: ${missing.join(', ')}` });
     }
     sendLaunchStatus({ message: 'Starting Minecraft launch…' });
-    const memorySettings = getMemorySettings();
+    const memorySettings = getMemorySettings(profile);
     const { launchedWith } = await launchModpack({
       installDir,
+      profile,
       account,
       onStatus: sendLaunchStatus,
       expectedModpackVersion,
@@ -658,19 +796,23 @@ ipcMain.handle('hellas:cancel-launch', async () => {
 });
 
   ipcMain.handle('hellas:trigger-update', async () => {
-    const updateSource = resolveUpdateSource();
-    if (!updateSource || !updateSource.url) {
+    const profile = getActiveProfile();
+    const updateSource = resolveUpdateSource(profile);
+    if (!hasSource(updateSource)) {
       sendInstallStatus({ message: 'Update source is not configured.', level: 'error' });
       throw new Error('Update source is not configured.');
     }
 
-    recordBehavior('update-start', { updateSource: updateSource.url });
+    recordBehavior('update-start', { profileId: profile.id, updateSource: updateSource.sourceUrl || updateSource.url });
     sendInstallStatus({ message: 'Starting update…' });
     sendUpdateProgress({ state: 'downloading', progress: 0 });
-    const installDir = getInstallDir();
+    const installDir = getInstallDir(profile);
     try {
       const result = await runUpdateTask((signal) =>
-        downloadAndExtractUpdate(updateSource, installDir, sendUpdateProgress, signal)
+        downloadAndExtractUpdate(updateSource, installDir, sendUpdateProgress, signal, {
+          profile,
+          additionalMods: getAdditionalMods(profile)
+        })
       );
 
       if (result.cancelled) {
@@ -679,17 +821,19 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       }
 
       if (result.version) {
-        store.set('installedVersion', result.version);
-        store.set('lastKnownVersion', result.version);
+        setProfileVersion(profile, 'installedVersion', result.version);
+        setProfileVersion(profile, 'lastKnownVersion', result.version);
       }
+      rememberManifestProfileDetails(profile, result);
 
+      const runtimeProfile = applyProfileOverrides(profile);
       sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
-      await ensureBaseRuntime({ installDir: installDir, onStatus: sendInstallStatus });
+      await ensureBaseRuntime({ installDir: installDir, profile: runtimeProfile, onStatus: sendInstallStatus });
 
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Update completed.', level: 'success' });
       recordBehavior('update-complete', { installDir, version: result.version || null });
-      return { installation: await getInstallationState(), version: result.version || null };
+      return { installation: await getInstallationState(runtimeProfile), version: result.version || null };
     } catch (error) {
       sendInstallStatus({ message: error.message || 'Update failed.', level: 'error' });
       sendUpdateProgress({ state: 'error', message: error.message || 'Update failed.' });
@@ -700,18 +844,24 @@ ipcMain.handle('hellas:cancel-launch', async () => {
   });
 
   ipcMain.handle('hellas:fresh-reinstall', async () => {
-    const updateSource = resolveUpdateSource();
-    if (!updateSource || !updateSource.url) {
+    const profile = getActiveProfile();
+    const updateSource = resolveUpdateSource(profile);
+    if (!hasSource(updateSource)) {
       sendInstallStatus({ message: 'Update source is not configured.', level: 'error' });
       throw new Error('Update source is not configured.');
   }
 
-    recordBehavior('reinstall-start', { updateSource: updateSource.url });
+    recordBehavior('reinstall-start', { profileId: profile.id, updateSource: updateSource.sourceUrl || updateSource.url });
     sendInstallStatus({ message: 'Starting fresh reinstall…' });
     sendUpdateProgress({ state: 'downloading', progress: 0 });
-    const installDir = getInstallDir();
+    const installDir = getInstallDir(profile);
     try {
-      const result = await runUpdateTask((signal) => freshReinstall(installDir, sendUpdateProgress, signal));
+      const result = await runUpdateTask((signal) =>
+        freshReinstall(installDir, sendUpdateProgress, signal, {
+          profile,
+          additionalMods: getAdditionalMods(profile)
+        })
+      );
 
       if (result.cancelled) {
         sendUpdateProgress({ state: 'cancelled', message: 'Reinstall cancelled.' });
@@ -719,17 +869,19 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       }
 
       if (result.version) {
-        store.set('installedVersion', result.version);
-        store.set('lastKnownVersion', result.version);
+        setProfileVersion(profile, 'installedVersion', result.version);
+        setProfileVersion(profile, 'lastKnownVersion', result.version);
       }
+      rememberManifestProfileDetails(profile, result);
 
+      const runtimeProfile = applyProfileOverrides(profile);
       sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
-      await ensureBaseRuntime({ installDir: installDir, onStatus: sendInstallStatus });
+      await ensureBaseRuntime({ installDir: installDir, profile: runtimeProfile, onStatus: sendInstallStatus });
 
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
       sendInstallStatus({ message: 'Reinstall finished.', level: 'success' });
       recordBehavior('reinstall-complete', { installDir, version: result.version || null });
-      return { installation: await getInstallationState(), version: result.version || null };
+      return { installation: await getInstallationState(runtimeProfile), version: result.version || null };
     } catch (error) {
       sendInstallStatus({ message: error.message || 'Reinstall failed.', level: 'error' });
       sendUpdateProgress({ state: 'error', message: error.message || 'Reinstall failed.' });
@@ -767,13 +919,14 @@ ipcMain.handle('hellas:cancel-launch', async () => {
     }
   });
 
-ipcMain.handle('hellas:get-installation', async () => getInstallationState());
+ipcMain.handle('hellas:get-installation', async () => getInstallationState(getActiveProfile()));
 
 ipcMain.handle('hellas:update-known-version', async (_event, version) => {
+  const profile = getActiveProfile();
   if (version) {
-    store.set('lastKnownVersion', version);
+    setProfileVersion(profile, 'lastKnownVersion', version);
   }
-  return store.get('lastKnownVersion');
+  return getProfileVersion(profile, 'lastKnownVersion');
 });
 
 ipcMain.handle('hellas:open-log-window', async () => {

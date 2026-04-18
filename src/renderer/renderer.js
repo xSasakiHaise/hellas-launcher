@@ -41,6 +41,13 @@ const memoryMinInput = document.getElementById('memory-min');
 const memoryTotal = document.getElementById('memory-total');
 const memoryRecommended = document.getElementById('memory-recommended');
 const memoryActive = document.getElementById('memory-active');
+const profileSelect = document.getElementById('profile-select');
+const modsModal = document.getElementById('mods-modal');
+const closeModsModal = document.getElementById('close-mods-modal');
+const saveAdditionalModsButton = document.getElementById('save-additional-mods');
+const cancelAdditionalModsButton = document.getElementById('cancel-additional-mods');
+const additionalModLinks = document.getElementById('additional-mod-links');
+const modsProfileLabel = document.getElementById('mods-profile-label');
 
 let launcherState = {
   termsAccepted: false,
@@ -65,6 +72,9 @@ let launcherState = {
     hasUpdateSource: false,
     preferredVersion: null
   },
+  profiles: [],
+  activeProfile: null,
+  additionalMods: [],
   isUpdating: false
 };
 
@@ -171,6 +181,35 @@ function setMemoryModal(open) {
   memoryModal.hidden = !open;
   if (open) {
     syncMemoryForm();
+  }
+}
+
+function syncProfileSelect() {
+  if (!profileSelect) return;
+  const profiles = Array.isArray(launcherState.profiles) ? launcherState.profiles : [];
+  const activeProfileId = launcherState.activeProfile?.id || launcherState.installation?.profileId || '';
+
+  profileSelect.innerHTML = '';
+  profiles.forEach((profile) => {
+    const option = document.createElement('option');
+    option.value = profile.id;
+    option.textContent = profile.label || profile.minecraftVersion || profile.id;
+    option.selected = profile.id === activeProfileId;
+    profileSelect.appendChild(option);
+  });
+}
+
+function setModsModal(open) {
+  if (!modsModal) return;
+  modsModal.hidden = !open;
+  if (open) {
+    const links = Array.isArray(launcherState.additionalMods) ? launcherState.additionalMods : [];
+    additionalModLinks.value = links.join('\n');
+    if (modsProfileLabel) {
+      modsProfileLabel.textContent = launcherState.activeProfile?.label
+        ? `Selected profile: ${launcherState.activeProfile.label}`
+        : '';
+    }
   }
 }
 
@@ -496,6 +535,7 @@ async function refreshState() {
     setAccountStatus('Not logged in', true);
   }
   applyMemoryState(state.memory || {});
+  syncProfileSelect();
   updateAccountUi();
   updateStartButtonState();
   updateInstallLabels();
@@ -516,6 +556,7 @@ document.addEventListener('keydown', (event) => {
     setDropdown(false);
     setAccountPanel(false);
     setMemoryModal(false);
+    setModsModal(false);
   }
 });
 
@@ -548,6 +589,14 @@ if (memoryModal) {
   memoryModal.addEventListener('click', (event) => {
     if (event.target === memoryModal) {
       setMemoryModal(false);
+    }
+  });
+}
+
+if (modsModal) {
+  modsModal.addEventListener('click', (event) => {
+    if (event.target === modsModal) {
+      setModsModal(false);
     }
   });
 }
@@ -625,6 +674,53 @@ if (closeMemoryModal) {
 
 if (cancelMemoryButton) {
   cancelMemoryButton.addEventListener('click', () => setMemoryModal(false));
+}
+
+if (profileSelect) {
+  profileSelect.addEventListener('change', async () => {
+    const profileId = profileSelect.value;
+    clearLaunchLog();
+    appendLaunchLog(`Switching to ${profileSelect.options[profileSelect.selectedIndex]?.textContent || profileId}...`);
+    try {
+      const result = await window.hellas.setActiveProfile(profileId);
+      launcherState.activeProfile = result.activeProfile;
+      launcherState.installation = result.installation;
+      launcherState.memory = result.memory;
+      launcherState.additionalMods = result.additionalMods || [];
+      applyMemoryState(result.memory || {});
+      await refreshState();
+      appendLaunchLog(`Selected ${launcherState.activeProfile.label}.`);
+    } catch (error) {
+      console.error('Failed to switch profile', error);
+      appendLaunchLog(error.message || 'Unable to switch game version.', 'error');
+      await refreshState();
+    }
+  });
+}
+
+if (closeModsModal) {
+  closeModsModal.addEventListener('click', () => setModsModal(false));
+}
+
+if (cancelAdditionalModsButton) {
+  cancelAdditionalModsButton.addEventListener('click', () => setModsModal(false));
+}
+
+if (saveAdditionalModsButton) {
+  saveAdditionalModsButton.addEventListener('click', async () => {
+    const links = additionalModLinks.value
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    try {
+      launcherState.additionalMods = await window.hellas.setAdditionalMods(links);
+      appendLaunchLog('Additional mod links saved. Run Install or Update to download them.');
+      setModsModal(false);
+    } catch (error) {
+      console.error('Failed to save additional mods', error);
+      appendLaunchLog(error.message || 'Unable to save additional mod links.', 'error');
+    }
+  });
 }
 
 if (memoryModeAuto && memoryModeCustom) {
@@ -820,6 +916,9 @@ dropdownActions.forEach((button) => {
           break;
         case 'adjust-ram':
           await openMemorySettings();
+          break;
+        case 'additional-mods':
+          setModsModal(true);
           break;
         case 'open-logs': {
           try {

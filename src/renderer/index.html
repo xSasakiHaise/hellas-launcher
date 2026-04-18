@@ -48,6 +48,7 @@
               <li><button data-action="dynmap">Dynmap</button></li>
               <li><button data-action="toggle-animation">Toggle Animation</button></li>
               <li><button data-action="adjust-ram">Adjust RAM</button></li>
+              <li><button data-action="additional-mods">Additional Mods</button></li>
               <li><button data-action="open-logs">Open Logs</button></li>
               <li><button data-action="open-install-folder">Open installation folder</button></li>
               <li><button data-action="reinstall-java8">Reinstall Java 8 only</button></li>
@@ -64,6 +65,10 @@
             <h1>Hellas Launcher</h1>
             <p class="subtitle">Enter the Hellas Region</p>
           </div>
+          <label class="profile-switch">
+            <span>Game Version</span>
+            <select id="profile-select"></select>
+          </label>
           <div class="status-row">
             <span id="install-state">Checking installation…</span>
             <span id="version-label"></span>
@@ -197,6 +202,38 @@
           <div class="modal-actions">
             <button id="save-memory" class="primary small">Save</button>
             <button id="cancel-memory" class="tertiary small">Cancel</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="modal-backdrop" id="mods-modal" hidden>
+      <div class="modal">
+        <div class="modal-header">
+          <div>
+            <h2>Additional Mods</h2>
+            <p class="subtitle">One direct download link per line for the selected game version.</p>
+          </div>
+          <button id="close-mods-modal" class="icon-button close-button" title="Close additional mods">
+            <span aria-hidden="true">×</span>
+          </button>
+        </div>
+
+        <div class="mods-settings">
+          <p class="memory-note" id="mods-profile-label"></p>
+          <textarea
+            id="additional-mod-links"
+            rows="8"
+            spellcheck="false"
+            placeholder="https://example.com/mod-file.jar"
+          ></textarea>
+          <p class="memory-note">
+            These links are downloaded after the official mod list. Removing a link removes the previously
+            downloaded file owned by that link on the next install or update.
+          </p>
+          <div class="modal-actions">
+            <button id="save-additional-mods" class="primary small">Save</button>
+            <button id="cancel-additional-mods" class="tertiary small">Cancel</button>
           </div>
         </div>
       </div>
