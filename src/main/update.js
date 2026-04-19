@@ -4,7 +4,7 @@ const os = require('os');
 const crypto = require('crypto');
 const fetch = require('node-fetch');
 const AdmZip = require('adm-zip');
-const { LEGACY_PROFILE_ID, getProfile, getProfileEnv } = require('./profiles');
+const { LEGACY_PROFILE_ID, getProfile, getProfileEnv, getProfileLoader } = require('./profiles');
 
 const DEFAULT_PACK_URL = 'https://hellasregion.com/download/launcher/latest/compact';
 const PROGRESS_PHASE_DOWNLOAD = 80; // percent allocated to download progress
@@ -200,17 +200,70 @@ function normalizeAdditionalModLinks(links = []) {
     .filter(Boolean);
 }
 
+function normalizeLoaderDescriptor(selected, profile) {
+  const profileLoader = getProfileLoader(profile);
+  const explicitType = normalizeString(
+    selected.loaderType ||
+      selected.modLoader ||
+      selected.loader?.type ||
+      (typeof selected.loader === 'string' ? selected.loader : '')
+  );
+  const explicitVersion = normalizeString(
+    selected.loaderVersion ||
+      selected.loader?.version ||
+      selected.neoforgeVersion ||
+      selected.neoForgeVersion ||
+      ''
+  );
+  const forgeAlias = normalizeString(selected.forgeVersion || selected.forge);
+  const staleForgeAlias =
+    profileLoader.type === 'neoforge' &&
+    !explicitType &&
+    !explicitVersion &&
+    forgeAlias &&
+    !/^neoforge[-_]/i.test(forgeAlias);
+  const candidateVersion = staleForgeAlias ? profileLoader.version : explicitVersion || forgeAlias || profileLoader.id;
+  const candidateType =
+    explicitType ||
+    (/^neoforge[-_]/i.test(candidateVersion) || selected.neoforgeVersion || selected.neoForgeVersion
+      ? 'neoforge'
+      : profileLoader.type);
+  const loader = getProfileLoader({
+    ...profile,
+    loaderType: candidateType,
+    loaderVersion: candidateVersion,
+    neoforgeVersion: candidateType === 'neoforge' ? candidateVersion : '',
+    forgeVersion: candidateVersion
+  });
+
+  return {
+    loader,
+    loaderType: loader.type,
+    loaderVersion: loader.version,
+    neoforgeVersion: loader.type === 'neoforge' ? loader.version : null,
+    forgeVersion: loader.type === 'neoforge' ? loader.id : loader.version
+  };
+}
+
 function normalizeManifestDescriptor(manifest, profile) {
   const selected = getProfileManifest(manifest, profile) || manifest.modpack || manifest;
   const archive = selected.archive || selected.configArchive || selected.modpack || null;
   const archiveUrl = normalizeString(selected.url || archive?.url);
   const archiveHash = normalizeString(selected.sha256 || selected.hash || archive?.sha256 || archive?.hash) || null;
+  const loaderDescriptor = normalizeLoaderDescriptor(selected, profile);
 
   return {
     schemaVersion: manifest.schemaVersion || manifest.schema || null,
     profileId: profile.id,
     minecraftVersion: selected.minecraftVersion || profile.minecraftVersion,
-    forgeVersion: selected.forgeVersion || selected.forge || profile.forgeVersion,
+    forgeVersion: loaderDescriptor.forgeVersion,
+    loaderType: loaderDescriptor.loaderType,
+    loaderVersion: loaderDescriptor.loaderVersion,
+    neoforgeVersion: loaderDescriptor.neoforgeVersion,
+    loader: {
+      type: loaderDescriptor.loaderType,
+      version: loaderDescriptor.loaderVersion
+    },
     javaMajor: selected.javaMajor || selected.java?.major || profile.java.major,
     version: selected.version || manifest.version || null,
     url: archiveUrl || null,
@@ -574,7 +627,13 @@ async function installManifestUpdate(resolved, targetDir, progressCallback, abor
   }
 
   progressCallback({ state: 'finalizing', progress: 95 });
-  return { version: resolved.version || null, forgeVersion: resolved.forgeVersion || null };
+  return {
+    version: resolved.version || null,
+    forgeVersion: resolved.forgeVersion || null,
+    loaderType: resolved.loaderType || null,
+    loaderVersion: resolved.loaderVersion || null,
+    neoforgeVersion: resolved.neoforgeVersion || null
+  };
 }
 
 async function downloadAndExtractUpdate(source, targetDir, progressCallback = () => {}, abortSignal, options = {}) {
@@ -592,7 +651,7 @@ async function downloadAndExtractUpdate(source, targetDir, progressCallback = ()
       resolved = await fetchFeedManifest(source.manifestUrl, profile);
     }
 
-    if (resolved.forgeVersion && options.onProfileResolved) {
+    if ((resolved.forgeVersion || resolved.loaderVersion) && options.onProfileResolved) {
       options.onProfileResolved(resolved);
     }
 

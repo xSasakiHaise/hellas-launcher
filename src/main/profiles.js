@@ -8,6 +8,8 @@ const PROFILE_DEFINITIONS = [
     id: LEGACY_PROFILE_ID,
     label: 'MC 1.16.5',
     minecraftVersion: '1.16.5',
+    loaderType: 'forge',
+    loaderVersion: '1.16.5-36.2.42',
     forgeVersion: '1.16.5-36.2.42',
     manifestKey: '1.16.5',
     legacy: true,
@@ -25,7 +27,10 @@ const PROFILE_DEFINITIONS = [
     id: 'mc-1.21.1',
     label: 'MC 1.21.1',
     minecraftVersion: '1.21.1',
-    forgeVersion: '1.21.1-52.1.0',
+    loaderType: 'neoforge',
+    loaderVersion: '21.1.227',
+    neoforgeVersion: '21.1.227',
+    forgeVersion: 'neoforge-21.1.227',
     manifestKey: '1.21.1',
     installDirName: path.join('profiles', 'mc-1.21.1'),
     update: {
@@ -40,13 +45,68 @@ const PROFILE_DEFINITIONS = [
   }
 ];
 
+function normalizeLoaderType(value, fallback = 'forge') {
+  const normalized = typeof value === 'string' ? value.trim().toLowerCase() : '';
+  if (normalized.includes('neo')) {
+    return 'neoforge';
+  }
+  if (normalized.includes('forge')) {
+    return 'forge';
+  }
+
+  return fallback;
+}
+
+function normalizeLoaderVersion(type, value) {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) {
+    return '';
+  }
+
+  if (type === 'neoforge') {
+    return raw.replace(/^neoforge[-_]/i, '');
+  }
+
+  return raw.replace(/^forge[-_]/i, '');
+}
+
+function getProfileLoader(profile) {
+  const explicitType =
+    profile?.loaderType ||
+    profile?.loader?.type ||
+    profile?.modLoader ||
+    (typeof profile?.loader === 'string' ? profile.loader : '');
+  const rawVersion =
+    profile?.loaderVersion ||
+    profile?.loader?.version ||
+    profile?.neoforgeVersion ||
+    profile?.forgeVersion ||
+    profile?.forge ||
+    '';
+  const inferredFallback = /^neoforge[-_]/i.test(String(rawVersion)) ? 'neoforge' : 'forge';
+  const type = normalizeLoaderType(explicitType, inferredFallback);
+  const version = normalizeLoaderVersion(type, rawVersion || profile?.loaderVersion || '');
+  const id = type === 'neoforge' ? `neoforge-${version}` : version;
+
+  return {
+    type,
+    version,
+    id,
+    label: type === 'neoforge' ? 'NeoForge' : 'Forge'
+  };
+}
+
 function withResolvedPaths(definition) {
+  const loader = getProfileLoader(definition);
   const rootDir = definition.legacy
     ? HELLAS_ROOT
     : path.join(HELLAS_ROOT, definition.installDirName || definition.id);
 
   return {
     ...definition,
+    loader,
+    loaderType: loader.type,
+    loaderVersion: loader.version,
     rootDir,
     installDir: rootDir,
     instanceDir: path.join(rootDir, 'modpack'),
@@ -90,6 +150,9 @@ function getProfileSummary(profile) {
     label: profile.label,
     minecraftVersion: profile.minecraftVersion,
     forgeVersion: profile.forgeVersion,
+    loaderType: profile.loaderType,
+    loaderVersion: profile.loaderVersion,
+    loader: getProfileLoader(profile),
     javaMajor: profile.java.major,
     installDir: profile.installDir,
     instanceDir: profile.instanceDir,
@@ -119,6 +182,7 @@ function getProfileEnv(profile, baseName) {
 module.exports = {
   LEGACY_PROFILE_ID,
   getProfile,
+  getProfileLoader,
   getProfiles,
   getProfileSummary,
   getProfileEnv,

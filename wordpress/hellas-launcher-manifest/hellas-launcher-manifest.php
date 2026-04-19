@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Hellas Launcher Manifest
  * Description: Stores the Hellas Launcher MC 1.21.1 manifest and per-file mod download links.
- * Version: 1.0.4
+ * Version: 1.0.5
  * Author: Hephaestus Forge
  */
 
@@ -15,6 +15,7 @@ const HELLAS_LAUNCHER_1211_LEGACY_OPTION = 'hellas_launcher_manifest_json';
 const HELLAS_LAUNCHER_1211_UPLOAD_ACTION = 'hellas_launcher_1211_upload_mods';
 const HELLAS_LAUNCHER_1211_MAX_CHUNK_BYTES = 1048576;
 const HELLAS_LAUNCHER_1211_MIN_CHUNK_BYTES = 262144;
+const HELLAS_LAUNCHER_1211_NEOFORGE_VERSION = '21.1.227';
 
 function hellas_launcher_1211_chunk_bytes(): int
 {
@@ -41,7 +42,14 @@ function hellas_launcher_1211_default_manifest(): array
                 'id' => 'mc-1.21.1',
                 'label' => 'MC 1.21.1',
                 'minecraftVersion' => '1.21.1',
-                'forgeVersion' => '1.21.1-52.1.0',
+                'loaderType' => 'neoforge',
+                'loaderVersion' => HELLAS_LAUNCHER_1211_NEOFORGE_VERSION,
+                'neoforgeVersion' => HELLAS_LAUNCHER_1211_NEOFORGE_VERSION,
+                'loader' => [
+                    'type' => 'neoforge',
+                    'version' => HELLAS_LAUNCHER_1211_NEOFORGE_VERSION,
+                ],
+                'forgeVersion' => 'neoforge-' . HELLAS_LAUNCHER_1211_NEOFORGE_VERSION,
                 'javaMajor' => 21,
                 'version' => '1.0.0',
                 'mods' => [],
@@ -156,6 +164,35 @@ function hellas_launcher_1211_normalize_download_items($items, string $directory
     return $normalized;
 }
 
+function hellas_launcher_1211_normalize_loader(array $profile): array
+{
+    $loader = isset($profile['loader']) && is_array($profile['loader']) ? $profile['loader'] : [];
+    $version = trim((string) (
+        $profile['loaderVersion'] ??
+        ($loader['version'] ?? '') ??
+        $profile['neoforgeVersion'] ??
+        $profile['neoForgeVersion'] ??
+        ''
+    ));
+    $forge_alias = trim((string) ($profile['forgeVersion'] ?? $profile['forge'] ?? ''));
+
+    if ($version === '' && preg_match('/^neoforge[-_](.+)$/i', $forge_alias, $matches)) {
+        $version = $matches[1];
+    }
+
+    if ($version === '' || preg_match('/^\d+\.\d+\.\d+-/', $version)) {
+        $version = HELLAS_LAUNCHER_1211_NEOFORGE_VERSION;
+    }
+
+    $version = preg_replace('/^neoforge[-_]/i', '', $version);
+
+    return [
+        'type' => 'neoforge',
+        'version' => $version,
+        'id' => 'neoforge-' . $version,
+    ];
+}
+
 function hellas_launcher_1211_normalize_manifest(array $manifest): array
 {
     $profiles = $manifest['profiles'] ?? [];
@@ -195,6 +232,15 @@ function hellas_launcher_1211_normalize_manifest(array $manifest): array
     $profile['minecraftVersion'] = '1.21.1';
     $profile['label'] = $profile['label'] ?? 'MC 1.21.1';
     $profile['javaMajor'] = $profile['javaMajor'] ?? 21;
+    $loader = hellas_launcher_1211_normalize_loader($profile);
+    $profile['loaderType'] = $loader['type'];
+    $profile['loaderVersion'] = $loader['version'];
+    $profile['neoforgeVersion'] = $loader['version'];
+    $profile['loader'] = [
+        'type' => $loader['type'],
+        'version' => $loader['version'],
+    ];
+    $profile['forgeVersion'] = $loader['id'];
     $profile['mods'] = hellas_launcher_1211_normalize_download_items($profile['mods'] ?? [], 'mods');
     $profile['resourcepacks'] = hellas_launcher_1211_normalize_download_items($profile['resourcepacks'] ?? [], 'resourcepacks');
     $profile['files'] = hellas_launcher_1211_normalize_download_items($profile['files'] ?? [], 'files');

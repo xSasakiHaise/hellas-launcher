@@ -6,7 +6,7 @@ const { execFile } = require('child_process');
 const { Client } = require('minecraft-launcher-core');
 const os = require('os');
 const { resolveBundledJava } = require('./javaResolver');
-const { LEGACY_PROFILE_ID, getProfile } = require('./profiles');
+const { LEGACY_PROFILE_ID, getProfile, getProfileLoader } = require('./profiles');
 
 const DEFAULT_PROFILE = getProfile(LEGACY_PROFILE_ID);
 const DEFAULT_MC_VERSION = DEFAULT_PROFILE.minecraftVersion;
@@ -20,14 +20,12 @@ const MODPACK_DIR_NAME = 'modpack';
 const FORGE_DIR_NAME = 'forge';
 const VERSIONS_DIR_NAME = 'versions';
 
-// Pin the Forge version used by the modpack.
-// When you move the modpack to a new Forge, just change this constant.
-const MODPACK_FORGE_VERSION = DEFAULT_PROFILE.forgeVersion;
+const DEFAULT_LOADER = getProfileLoader(DEFAULT_PROFILE);
 
 function resolveProfile(profile) {
   if (profile && typeof profile === 'object') {
     const base = getProfile(profile.id || LEGACY_PROFILE_ID);
-    return {
+    const merged = {
       ...base,
       ...profile,
       java: {
@@ -35,9 +33,23 @@ function resolveProfile(profile) {
         ...(profile.java || {})
       }
     };
+    const loader = getProfileLoader(merged);
+    return {
+      ...merged,
+      loader,
+      loaderType: loader.type,
+      loaderVersion: loader.version
+    };
   }
 
-  return getProfile(profile || LEGACY_PROFILE_ID);
+  const resolved = getProfile(profile || LEGACY_PROFILE_ID);
+  const loader = getProfileLoader(resolved);
+  return {
+    ...resolved,
+    loader,
+    loaderType: loader.type,
+    loaderVersion: loader.version
+  };
 }
 
 function getInstallSubpaths(installDir, profile = DEFAULT_PROFILE) {
@@ -52,6 +64,31 @@ function getInstallSubpaths(installDir, profile = DEFAULT_PROFILE) {
 
 const cachedForgeVersions = new Map();
 let activeLaunch = null;
+
+function getLoaderProfileId(loader, profile = DEFAULT_PROFILE) {
+  if (loader.type === 'neoforge') {
+    return loader.id;
+  }
+
+  const forgeBuild = loader.version.split('-')[1] || loader.version;
+  return `${resolveProfile(profile).minecraftVersion}-forge-${forgeBuild}`;
+}
+
+function getLoaderInstallerName(loader) {
+  if (loader.type === 'neoforge') {
+    return `neoforge-${loader.version}-installer.jar`;
+  }
+
+  return `forge-${loader.version}-installer.jar`;
+}
+
+function getLoaderDownloadUrl(loader) {
+  if (loader.type === 'neoforge') {
+    return `https://maven.neoforged.net/releases/net/neoforged/neoforge/${loader.version}/neoforge-${loader.version}-installer.jar`;
+  }
+
+  return `https://maven.minecraftforge.net/net/minecraftforge/forge/${loader.version}/forge-${loader.version}-installer.jar`;
+}
 
 function normalizeMemoryValue(value) {
   const parsed = Number(value);
@@ -153,21 +190,23 @@ async function ensureInstallDirExists(installDir, profile = DEFAULT_PROFILE) {
 }
 
 function getForgeInstallerPath(installDir, forgeVersion, profile = DEFAULT_PROFILE) {
-  if (!forgeVersion) return null;
+  const resolvedProfile = resolveProfile({ ...resolveProfile(profile), forgeVersion });
+  const loader = getProfileLoader(resolvedProfile);
+  if (!loader.version) return null;
 
-  const { forgeDir } = getInstallSubpaths(installDir, profile);
-  return path.join(forgeDir, forgeVersion, `forge-${forgeVersion}-installer.jar`);
+  const { forgeDir } = getInstallSubpaths(installDir, resolvedProfile);
+  return path.join(forgeDir, loader.id, getLoaderInstallerName(loader));
 }
 
-// Previously this pulled from Forge's Maven metadata and picked "latest".
-// That was giving you 36.0.0. We hard-pin it to the modpack's Forge version.
+// Previously this pulled from loader Maven metadata and picked "latest".
+// Keep it pinned per profile so old installs stay deterministic.
 async function fetchLatestForgeVersion(profile = DEFAULT_PROFILE) {
   const resolvedProfile = resolveProfile(profile);
   if (cachedForgeVersions.has(resolvedProfile.id)) {
     return cachedForgeVersions.get(resolvedProfile.id);
   }
 
-  const forgeVersion = resolvedProfile.forgeVersion || MODPACK_FORGE_VERSION;
+  const forgeVersion = getProfileLoader(resolvedProfile).id || DEFAULT_LOADER.id;
   cachedForgeVersions.set(resolvedProfile.id, forgeVersion);
   return forgeVersion;
 }
@@ -268,7 +307,9 @@ async function ensureMinecraftVersion(installDir, minecraftVersion = DEFAULT_MC_
 }
 
 async function ensureForgeInstaller(installDir, forgeVersion, onStatus, profile = DEFAULT_PROFILE) {
-  const installerPath = getForgeInstallerPath(installDir, forgeVersion, profile);
+  const resolvedProfile = resolveProfile({ ...resolveProfile(profile), forgeVersion });
+  const loader = getProfileLoader(resolvedProfile);
+  const installerPath = getForgeInstallerPath(installDir, forgeVersion, resolvedProfile);
   if (!installerPath) return null;
 
   const alreadyPresent = await fsp
@@ -279,12 +320,12 @@ async function ensureForgeInstaller(installDir, forgeVersion, onStatus, profile 
   if (alreadyPresent) return installerPath;
 
   await fsp.mkdir(path.dirname(installerPath), { recursive: true });
-  const downloadUrl = `https://maven.minecraftforge.net/net/minecraftforge/forge/${forgeVersion}/forge-${forgeVersion}-installer.jar`;
-  onStatus?.({ message: `Downloading Forge ${forgeVersion}...` });
+  const downloadUrl = getLoaderDownloadUrl(loader);
+  onStatus?.({ message: `Downloading ${loader.label} ${loader.version}...` });
 
   const response = await fetch(downloadUrl);
   if (!response.ok) {
-    throw new Error(`Failed to download Forge ${forgeVersion} (${response.status})`);
+    throw new Error(`Failed to download ${loader.label} ${loader.version} (${response.status})`);
   }
 
   const fileStream = fs.createWriteStream(installerPath);
@@ -340,6 +381,7 @@ async function readDirSafe(targetPath, modpackErrors) {
 
 async function checkLaunchRequirements(installDir, expectedModpackVersion = null, profile = DEFAULT_PROFILE) {
   const resolvedProfile = resolveProfile(profile);
+  const loader = getProfileLoader(resolvedProfile);
   const minecraftVersion = resolvedProfile.minecraftVersion;
   const forgeVersion = await fetchLatestForgeVersion(resolvedProfile);
   const rootDir = installDir || resolvedProfile.installDir;
@@ -347,7 +389,8 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
 
   const minecraftPath = path.join(versionsDir, minecraftVersion, `${minecraftVersion}.json`);
   const modpackErrors = [];
-  const forgePath = forgeVersion ? path.join(versionsDir, forgeVersion, `${forgeVersion}.json`) : null;
+  const loaderProfileId = getLoaderProfileId(loader, resolvedProfile);
+  const forgePath = loaderProfileId ? path.join(versionsDir, loaderProfileId, `${loaderProfileId}.json`) : null;
   const forgeInstallerPath = getForgeInstallerPath(rootDir, forgeVersion, resolvedProfile);
 
   const modsPath = path.join(modpackDir, 'mods');
@@ -360,21 +403,19 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
     .then(() => true)
     .catch(() => false);
 
-  const forgePresent = forgePath
+  const loaderProfilePresent = forgePath
     ? await fsp
         .access(forgePath)
         .then(() => true)
-        .catch(
-          async () =>
-            await fsp
-              .access(forgeInstallerPath)
-              .then(() => true)
-              .catch(() => false)
-        )
-    : await fsp
+        .catch(() => false)
+    : false;
+  const loaderInstallerPresent = forgeInstallerPath
+    ? await fsp
         .access(forgeInstallerPath)
         .then(() => true)
-        .catch(() => false);
+        .catch(() => false)
+    : false;
+  const forgePresent = loader.type === 'neoforge' ? loaderInstallerPresent : loaderProfilePresent || loaderInstallerPresent;
 
   const expectedModpackJar = expectedModpackVersion ? `hellasforms-${expectedModpackVersion}.jar` : null;
   const modsEntries = await Promise.all(modDirectories.map((dir) => readDirSafe(dir, modpackErrors)));
@@ -391,6 +432,9 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
     minecraftVersion,
     profileId: resolvedProfile.id,
     forgeVersion,
+    loader,
+    loaderVersion: loader.version,
+    loaderProfileId,
     forgeInstallerPath,
     modpackVersion: detectedVersion,
     searchedModDirectories: modDirectories,
@@ -409,6 +453,7 @@ async function checkLaunchRequirements(installDir, expectedModpackVersion = null
 
 async function ensureBaseRuntime({ installDir, profile = DEFAULT_PROFILE, onStatus = () => {} }) {
   const resolvedProfile = resolveProfile(profile);
+  const loader = getProfileLoader(resolvedProfile);
   const rootDir = installDir || resolvedProfile.installDir;
   if (!rootDir) {
     throw new Error('Install directory is not set.');
@@ -421,14 +466,14 @@ async function ensureBaseRuntime({ installDir, profile = DEFAULT_PROFILE, onStat
   onStatus({ message: 'Checking Minecraft files…' });
   await ensureMinecraftVersion(rootDir, minecraftVersion, onStatus);
 
-  onStatus({ message: 'Checking Forge installer…' });
+  onStatus({ message: `Checking ${loader.label} installer…` });
   await ensureForgeInstaller(rootDir, forgeVersion, onStatus, resolvedProfile);
 
   if (resolvedProfile.minecraftVersion === DEFAULT_MC_VERSION) {
     await ensureLog4jConfig(rootDir, onStatus, resolvedProfile);
   }
 
-  return { minecraftVersion, forgeVersion };
+  return { minecraftVersion, forgeVersion, loader };
 }
 
 async function launchModpack({
@@ -452,7 +497,7 @@ async function launchModpack({
 
   await ensureInstallDirExists(rootDir, resolvedProfile);
   onStatus({ message: `Checking installation in ${rootDir}` });
-  const { requirements, forgeVersion, forgeInstallerPath, modpackErrors, searchedModDirectories } =
+  const { requirements, forgeVersion, forgeInstallerPath, modpackErrors, searchedModDirectories, loader } =
     await checkLaunchRequirements(rootDir, expectedModpackVersion, resolvedProfile);
   const missing = Object.entries(requirements)
     .filter(([, present]) => !present)
@@ -493,7 +538,7 @@ async function launchModpack({
     try {
       resolvedForgeInstaller = await ensureForgeInstaller(rootDir, forgeVersion, onStatus, resolvedProfile);
     } catch (error) {
-      throw new Error(`Failed while downloading Forge ${forgeVersion}: ${error.message}`);
+      throw new Error(`Failed while downloading ${loader.label} ${loader.version}: ${error.message}`);
     }
   }
 
@@ -543,7 +588,7 @@ async function launchModpack({
     launcher.on('data', onDebug);
   });
 
-  onStatus({ message: `Launching with Forge ${forgeVersion}` });
+  onStatus({ message: `Launching with ${loader.label} ${loader.version}` });
   const log4jConfigPath =
     resolvedProfile.minecraftVersion === DEFAULT_MC_VERSION
       ? await ensureLog4jConfig(rootDir, onStatus, resolvedProfile).catch((error) => {
@@ -576,9 +621,7 @@ async function launchModpack({
     onStatus({ message: `Using bundled Java runtime at ${javaExecutable}` });
   }
 
-  // Build the Forge profile id that matches the modpack:
-  // forgeVersion is "1.16.5-36.2.42" → profile folder is "1.16.5-forge-36.2.42"
-  const forgeProfileId = `${resolvedProfile.minecraftVersion}-forge-${forgeVersion.split('-')[1]}`;
+  const forgeProfileId = getLoaderProfileId(loader, resolvedProfile);
 
   // Respect custom RAM settings instead of hardcoded values
   const memoryAllocation = calculateMemoryAllocation(memorySettings);
@@ -599,12 +642,11 @@ async function launchModpack({
       number: resolvedProfile.minecraftVersion,
       type: 'release',
 
-      // Pre-built Forge profile folder under versions/
-      // e.g. <HELLAS_ROOT>/versions/1.16.5-forge-36.2.42/...
+      // Pre-built loader profile folder under versions/.
       custom: forgeProfileId
     },
 
-    // Forge installer / profile to use (resolved earlier)
+    // Loader installer / profile to use (resolved earlier)
     forge: resolvedForgeInstaller,
 
     memory: memoryAllocation,
@@ -627,7 +669,7 @@ async function launchModpack({
   });
 
   await activeLaunch;
-  return { launchedWith: forgeVersion };
+  return { launchedWith: forgeVersion, loader };
 }
 
 function cancelLaunch() {

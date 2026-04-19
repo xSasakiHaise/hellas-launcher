@@ -18,7 +18,14 @@ const {
   buildMemoryPlan
 } = require('./launcher');
 const { initLogger, logMessage, getLauncherLogPath, readLauncherLog } = require('./logger');
-const { LEGACY_PROFILE_ID, getProfile, getProfiles, getProfileSummary, normalizeProfileId } = require('./profiles');
+const {
+  LEGACY_PROFILE_ID,
+  getProfile,
+  getProfileLoader,
+  getProfiles,
+  getProfileSummary,
+  normalizeProfileId
+} = require('./profiles');
 
 const isDevelopment = process.env.NODE_ENV === 'development';
 let mainWindow;
@@ -97,10 +104,21 @@ function applyProfileOverrides(profile) {
     ? { ...profile.java, major: javaMajor, allowedMajors: [javaMajor] }
     : { ...profile.java };
 
-  return {
+  const merged = {
     ...profile,
     forgeVersion: state.forgeVersion || profile.forgeVersion,
+    loaderType: state.loaderType || profile.loaderType,
+    loaderVersion: state.loaderVersion || profile.loaderVersion,
+    neoforgeVersion: state.neoforgeVersion || profile.neoforgeVersion,
     java: overriddenJava
+  };
+  const loader = getProfileLoader(merged);
+
+  return {
+    ...merged,
+    loader,
+    loaderType: loader.type,
+    loaderVersion: loader.version
   };
 }
 
@@ -140,6 +158,15 @@ function setProfileVersion(profile, key, value) {
 }
 
 function rememberManifestProfileDetails(profile, manifest = {}) {
+  if (manifest.loaderType) {
+    setProfileStateValue(profile, 'loaderType', manifest.loaderType);
+  }
+  if (manifest.loaderVersion) {
+    setProfileStateValue(profile, 'loaderVersion', manifest.loaderVersion);
+  }
+  if (manifest.neoforgeVersion) {
+    setProfileStateValue(profile, 'neoforgeVersion', manifest.neoforgeVersion);
+  }
   if (manifest.forgeVersion) {
     setProfileStateValue(profile, 'forgeVersion', manifest.forgeVersion);
   }
@@ -328,7 +355,7 @@ async function getInstallationState(profile = getActiveProfile()) {
     setProfileVersion(profile, 'installedVersion', detectedModpackVersion);
   }
   // Consider the installation launch-ready once the modpack content is present; the
-  // launcher can download missing Minecraft/Forge files on demand during launch.
+  // launcher can download missing Minecraft/loader files on demand during launch.
   const readyToLaunch = installDirExists && Boolean(resolvedInstalledVersion) && Boolean(requirements.modpack);
 
   return {
@@ -662,7 +689,7 @@ ipcMain.handle('hellas:poll-device-login', async (_event, payload) => {
       rememberManifestProfileDetails(profile, result);
 
       const runtimeProfile = applyProfileOverrides(profile);
-      sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
+      sendInstallStatus({ message: 'Verifying Minecraft and loader files…' });
       await ensureBaseRuntime({ installDir: dir, profile: runtimeProfile, onStatus: sendInstallStatus });
 
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
@@ -770,7 +797,7 @@ ipcMain.handle('hellas:logout', async () => {
     }
     sendLaunchStatus({ message: 'Starting Minecraft launch…' });
     const memorySettings = getMemorySettings(profile);
-    const { launchedWith } = await launchModpack({
+    const { launchedWith, loader } = await launchModpack({
       installDir,
       profile,
       account,
@@ -778,9 +805,10 @@ ipcMain.handle('hellas:logout', async () => {
       expectedModpackVersion,
       memorySettings
     });
-    sendLaunchStatus({ message: `Launch completed with Forge ${launchedWith}`, level: 'success' });
-    logMessage('info', 'Launch completed', { launchedWith });
-    return { account: { username: account.username }, installDir, launchedWith };
+    const launchedLoader = loader ? `${loader.label} ${loader.version}` : launchedWith;
+    sendLaunchStatus({ message: `Launch completed with ${launchedLoader}`, level: 'success' });
+    logMessage('info', 'Launch completed', { launchedWith, loader });
+    return { account: { username: account.username }, installDir, launchedWith, loader };
   } catch (error) {
     sendLaunchStatus({ message: error.message || 'Failed to launch.', level: 'error' });
     logMessage('error', 'Launch failed', { error: error.message });
@@ -827,7 +855,7 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       rememberManifestProfileDetails(profile, result);
 
       const runtimeProfile = applyProfileOverrides(profile);
-      sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
+      sendInstallStatus({ message: 'Verifying Minecraft and loader files…' });
       await ensureBaseRuntime({ installDir: installDir, profile: runtimeProfile, onStatus: sendInstallStatus });
 
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
@@ -875,7 +903,7 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       rememberManifestProfileDetails(profile, result);
 
       const runtimeProfile = applyProfileOverrides(profile);
-      sendInstallStatus({ message: 'Verifying Minecraft and Forge files…' });
+      sendInstallStatus({ message: 'Verifying Minecraft and loader files…' });
       await ensureBaseRuntime({ installDir: installDir, profile: runtimeProfile, onStatus: sendInstallStatus });
 
       sendUpdateProgress({ state: 'complete', progress: 100, version: result.version || null });
