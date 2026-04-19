@@ -59,6 +59,14 @@ The plugin stores:
 - `url`
 - `sha256`
 
-The plugin does not impose an additional file size limit. Browser uploads are still limited by PHP, WordPress, and web server settings such as `upload_max_filesize`, `post_max_size`, Nginx `client_max_body_size`, Apache limits, or host-level limits.
+The primary uploader sends every selected file in 5 MB chunks through:
+
+```text
+/wp-json/hellas-launcher-1211/v1/upload-chunk
+```
+
+This avoids one large all-or-nothing POST and makes batches of many mods more reliable. Keep the admin page open until each selected file shows as completed.
+
+The plugin does not impose an overall file size limit. Each request is still limited by PHP, WordPress, and web server settings such as `upload_max_filesize`, `post_max_size`, Nginx `client_max_body_size`, Apache limits, or host-level limits. Because the chunk size is 5 MB, those server limits must allow requests slightly larger than 5 MB.
 
 Configure the launcher with `PACK_MANIFEST_URL_1_21_1=https://example.com/wp-json/hellas-launcher-1211/v1/manifest`.

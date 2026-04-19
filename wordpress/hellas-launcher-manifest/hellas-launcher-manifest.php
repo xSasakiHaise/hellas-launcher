@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Hellas Launcher Manifest
  * Description: Stores the Hellas Launcher MC 1.21.1 manifest and per-file mod download links.
- * Version: 1.0.1
+ * Version: 1.0.2
  * Author: Hephaestus Forge
  */
 
@@ -13,6 +13,7 @@ if (!defined('ABSPATH')) {
 const HELLAS_LAUNCHER_1211_MANIFEST_OPTION = 'hellas_launcher_1211_manifest_json';
 const HELLAS_LAUNCHER_1211_LEGACY_OPTION = 'hellas_launcher_manifest_json';
 const HELLAS_LAUNCHER_1211_UPLOAD_ACTION = 'hellas_launcher_1211_upload_mods';
+const HELLAS_LAUNCHER_1211_CHUNK_BYTES = 5242880;
 
 function hellas_launcher_1211_default_manifest(): array
 {
@@ -164,6 +165,8 @@ function hellas_launcher_1211_render_settings_page(): void
     }
 
     $upload_limit = function_exists('wp_max_upload_size') ? size_format(wp_max_upload_size()) : 'server configured limit';
+    $chunk_endpoint = rest_url('hellas-launcher-1211/v1/upload-chunk');
+    $chunk_nonce = wp_create_nonce('wp_rest');
     $uploaded = isset($_GET['hellas_1211_uploaded']) ? (int) $_GET['hellas_1211_uploaded'] : 0;
     $upload_error = isset($_GET['hellas_1211_error']) ? sanitize_text_field(wp_unslash($_GET['hellas_1211_error'])) : '';
     ?>
@@ -198,16 +201,200 @@ function hellas_launcher_1211_render_settings_page(): void
             <code>profiles.mc-1.21.1.mods</code> with URL, file name, and SHA-256.
         </p>
         <p>
-            This plugin does not impose its own file size limit. The effective upload limit is still controlled by
-            PHP, WordPress, and the web server. Current WordPress reported limit:
+            The primary uploader sends every file in <?php echo esc_html(size_format(HELLAS_LAUNCHER_1211_CHUNK_BYTES)); ?>
+            chunks, so a single failed request does not destroy the whole batch. The effective per-request limit is still
+            controlled by PHP, WordPress, and the web server. Current WordPress reported limit:
             <strong><?php echo esc_html($upload_limit); ?></strong>.
         </p>
-        <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" enctype="multipart/form-data">
-            <?php wp_nonce_field(HELLAS_LAUNCHER_1211_UPLOAD_ACTION); ?>
-            <input type="hidden" name="action" value="<?php echo esc_attr(HELLAS_LAUNCHER_1211_UPLOAD_ACTION); ?>" />
-            <input type="file" name="hellas_mods[]" accept=".jar,.zip" multiple />
-            <?php submit_button('Upload and Add to Manifest', 'secondary'); ?>
-        </form>
+        <div
+            id="hellas-1211-uploader"
+            data-endpoint="<?php echo esc_url($chunk_endpoint); ?>"
+            data-nonce="<?php echo esc_attr($chunk_nonce); ?>"
+            data-chunk-size="<?php echo esc_attr((string) HELLAS_LAUNCHER_1211_CHUNK_BYTES); ?>"
+            style="border:1px solid #c3c4c7;padding:16px;background:#fff;max-width:900px;"
+        >
+            <input type="file" id="hellas-1211-files" accept=".jar,.zip" multiple />
+            <button type="button" class="button button-secondary" id="hellas-1211-start-upload">
+                Upload selected files
+            </button>
+            <p class="description">
+                Keep this page open until all selected files show as completed.
+            </p>
+            <div id="hellas-1211-upload-list" style="margin-top:12px;"></div>
+        </div>
+
+        <noscript>
+            <p><strong>JavaScript is disabled.</strong> Use the fallback upload below for small files only.</p>
+            <form method="post" action="<?php echo esc_url(admin_url('admin-post.php')); ?>" enctype="multipart/form-data">
+                <?php wp_nonce_field(HELLAS_LAUNCHER_1211_UPLOAD_ACTION); ?>
+                <input type="hidden" name="action" value="<?php echo esc_attr(HELLAS_LAUNCHER_1211_UPLOAD_ACTION); ?>" />
+                <input type="file" name="hellas_mods[]" accept=".jar,.zip" multiple />
+                <?php submit_button('Fallback Upload and Add to Manifest', 'secondary'); ?>
+            </form>
+        </noscript>
+
+        <script>
+        (function () {
+            const root = document.getElementById('hellas-1211-uploader');
+            if (!root || !window.fetch || !window.FormData || !window.Blob) {
+                return;
+            }
+
+            const input = document.getElementById('hellas-1211-files');
+            const startButton = document.getElementById('hellas-1211-start-upload');
+            const list = document.getElementById('hellas-1211-upload-list');
+            const endpoint = root.getAttribute('data-endpoint');
+            const nonce = root.getAttribute('data-nonce');
+            const chunkSize = parseInt(root.getAttribute('data-chunk-size'), 10) || 5242880;
+
+            function createRow(file) {
+                const row = document.createElement('div');
+                row.style.margin = '8px 0';
+
+                const name = document.createElement('strong');
+                name.textContent = file.name;
+
+                const status = document.createElement('span');
+                status.textContent = ' waiting';
+                status.style.marginLeft = '8px';
+
+                const progress = document.createElement('progress');
+                progress.max = 100;
+                progress.value = 0;
+                progress.style.display = 'block';
+                progress.style.width = '100%';
+                progress.style.marginTop = '4px';
+
+                row.appendChild(name);
+                row.appendChild(status);
+                row.appendChild(progress);
+                list.appendChild(row);
+
+                return { progress, status };
+            }
+
+            async function readResponse(response) {
+                const text = await response.text();
+                if (!text) {
+                    return {};
+                }
+
+                try {
+                    return JSON.parse(text);
+                } catch (error) {
+                    return { message: text };
+                }
+            }
+
+            function sleep(ms) {
+                return new Promise(function (resolve) {
+                    window.setTimeout(resolve, ms);
+                });
+            }
+
+            async function uploadFile(file, row) {
+                if (!/\.(jar|zip)$/i.test(file.name)) {
+                    throw new Error('Only .jar and .zip files are accepted.');
+                }
+
+                const uploadId = [
+                    Date.now().toString(36),
+                    Math.random().toString(36).slice(2),
+                    file.name
+                ].join('-').replace(/[^a-zA-Z0-9_.-]/g, '-');
+                const totalChunks = Math.max(1, Math.ceil(file.size / chunkSize));
+                let finalResult = null;
+
+                for (let index = 0; index < totalChunks; index++) {
+                    const start = index * chunkSize;
+                    const end = Math.min(file.size, start + chunkSize);
+                    const form = new FormData();
+                    form.append('uploadId', uploadId);
+                    form.append('fileName', file.name);
+                    form.append('chunkIndex', String(index));
+                    form.append('totalChunks', String(totalChunks));
+                    form.append('chunk', file.slice(start, end), file.name + '.part');
+
+                    row.status.textContent = ' uploading chunk ' + (index + 1) + ' of ' + totalChunks;
+
+                    let body = null;
+                    let ok = false;
+                    let lastError = '';
+                    for (let attempt = 1; attempt <= 3; attempt++) {
+                        try {
+                            const response = await fetch(endpoint, {
+                                method: 'POST',
+                                credentials: 'same-origin',
+                                headers: { 'X-WP-Nonce': nonce },
+                                body: form
+                            });
+                            body = await readResponse(response);
+
+                            if (response.ok && !body.code) {
+                                ok = true;
+                                break;
+                            }
+
+                            lastError = body.message || 'Upload request failed.';
+                        } catch (error) {
+                            lastError = error.message || 'Upload request failed.';
+                        }
+
+                        if (attempt < 3) {
+                            row.status.textContent = ' retrying chunk ' + (index + 1) + ' of ' + totalChunks;
+                            await sleep(1000 * attempt);
+                        }
+                    }
+
+                    if (!ok) {
+                        throw new Error(lastError || 'Upload request failed.');
+                    }
+
+                    finalResult = body;
+                    row.progress.value = Math.round(((index + 1) / totalChunks) * 100);
+                }
+
+                if (!finalResult || !finalResult.complete) {
+                    throw new Error('Upload finished, but the server did not assemble the file.');
+                }
+
+                row.status.textContent = ' completed';
+            }
+
+            startButton.addEventListener('click', async function () {
+                const files = Array.from(input.files || []);
+                if (!files.length) {
+                    return;
+                }
+
+                startButton.disabled = true;
+                list.innerHTML = '';
+                let failures = 0;
+
+                for (const file of files) {
+                    const row = createRow(file);
+                    try {
+                        await uploadFile(file, row);
+                    } catch (error) {
+                        failures++;
+                        row.status.textContent = ' failed: ' + error.message;
+                        row.progress.value = 0;
+                    }
+                }
+
+                if (failures === 0) {
+                    const done = document.createElement('p');
+                    done.textContent = 'All uploads completed. Reloading the manifest view.';
+                    list.appendChild(done);
+                    window.setTimeout(function () {
+                        window.location.reload();
+                    }, 800);
+                }
+
+                startButton.disabled = false;
+            });
+        }());
+        </script>
 
         <p>
             New launcher endpoint:
@@ -261,6 +448,42 @@ function hellas_launcher_1211_upload_dir(): array
     }
 
     return ['path' => $path, 'url' => $url];
+}
+
+function hellas_launcher_1211_chunk_dir(): array
+{
+    $uploads = wp_upload_dir();
+    $subdir = 'hellas-launcher/1.21.1/.chunks';
+    $path = trailingslashit($uploads['basedir']) . $subdir;
+    $url = trailingslashit($uploads['baseurl']) . $subdir;
+
+    if (!wp_mkdir_p($path)) {
+        throw new RuntimeException('Could not create the Hellas chunk upload directory.');
+    }
+
+    return ['path' => $path, 'url' => $url];
+}
+
+function hellas_launcher_1211_validate_mod_file_name(string $name): string
+{
+    $file_name = sanitize_file_name($name);
+    $extension = strtolower(pathinfo($file_name, PATHINFO_EXTENSION));
+
+    if ($file_name === '' || !in_array($extension, ['jar', 'zip'], true)) {
+        throw new RuntimeException('Only .jar and .zip files are accepted.');
+    }
+
+    return $file_name;
+}
+
+function hellas_launcher_1211_mod_entry(array $upload_dir, string $file_name, string $destination): array
+{
+    return [
+        'id' => sanitize_title(pathinfo($file_name, PATHINFO_FILENAME)),
+        'fileName' => $file_name,
+        'url' => trailingslashit($upload_dir['url']) . rawurlencode($file_name),
+        'sha256' => hash_file('sha256', $destination),
+    ];
 }
 
 function hellas_launcher_1211_uploaded_files(): array
@@ -343,29 +566,25 @@ function hellas_launcher_1211_handle_mod_uploads(): void
                 throw new RuntimeException(hellas_launcher_1211_handle_upload_error((int) $file['error']));
             }
 
-            $extension = strtolower(pathinfo((string) $file['name'], PATHINFO_EXTENSION));
-            if (!in_array($extension, ['jar', 'zip'], true)) {
-                throw new RuntimeException('Only .jar and .zip files are accepted.');
-            }
-
             if (!is_uploaded_file($file['tmp_name'])) {
                 throw new RuntimeException('Upload validation failed.');
             }
 
-            $file_name = wp_unique_filename($upload_dir['path'], sanitize_file_name((string) $file['name']));
+            if ((int) ($file['size'] ?? 0) <= 0) {
+                throw new RuntimeException('Uploaded mod file is empty.');
+            }
+
+            $file_name = hellas_launcher_1211_validate_mod_file_name((string) $file['name']);
             $destination = trailingslashit($upload_dir['path']) . $file_name;
 
             if (!move_uploaded_file($file['tmp_name'], $destination)) {
                 throw new RuntimeException('Could not move uploaded file into the Hellas mod upload directory.');
             }
 
-            $file_url = trailingslashit($upload_dir['url']) . rawurlencode($file_name);
-            $manifest = hellas_launcher_1211_add_mod_to_manifest($manifest, [
-                'id' => sanitize_title(pathinfo($file_name, PATHINFO_FILENAME)),
-                'fileName' => $file_name,
-                'url' => $file_url,
-                'sha256' => hash_file('sha256', $destination),
-            ]);
+            $manifest = hellas_launcher_1211_add_mod_to_manifest(
+                $manifest,
+                hellas_launcher_1211_mod_entry($upload_dir, $file_name, $destination)
+            );
             $uploaded_count++;
         }
 
@@ -381,6 +600,176 @@ function hellas_launcher_1211_handle_mod_uploads(): void
     }
 }
 add_action('admin_post_' . HELLAS_LAUNCHER_1211_UPLOAD_ACTION, 'hellas_launcher_1211_handle_mod_uploads');
+
+function hellas_launcher_1211_remove_directory(string $directory, string $root): void
+{
+    $real_directory = realpath($directory);
+    $real_root = realpath($root);
+
+    if (
+        !$real_directory ||
+        !$real_root ||
+        $real_directory === $real_root ||
+        strpos($real_directory . DIRECTORY_SEPARATOR, $real_root . DIRECTORY_SEPARATOR) !== 0
+    ) {
+        return;
+    }
+
+    foreach (scandir($real_directory) ?: [] as $item) {
+        if ($item === '.' || $item === '..') {
+            continue;
+        }
+
+        $path = $real_directory . DIRECTORY_SEPARATOR . $item;
+        if (is_dir($path)) {
+            hellas_launcher_1211_remove_directory($path, $real_root);
+        } elseif (is_file($path)) {
+            unlink($path);
+        }
+    }
+
+    rmdir($real_directory);
+}
+
+function hellas_launcher_1211_cleanup_old_chunks(string $chunk_root): void
+{
+    $max_age = DAY_IN_SECONDS;
+    $now = time();
+
+    foreach (scandir($chunk_root) ?: [] as $item) {
+        if ($item === '.' || $item === '..') {
+            continue;
+        }
+
+        $path = trailingslashit($chunk_root) . $item;
+        if (is_dir($path) && $now - (int) filemtime($path) > $max_age) {
+            hellas_launcher_1211_remove_directory($path, $chunk_root);
+        }
+    }
+}
+
+function hellas_launcher_1211_rest_upload_chunk(WP_REST_Request $request)
+{
+    try {
+        $upload_id = sanitize_key((string) $request->get_param('uploadId'));
+        $file_name = hellas_launcher_1211_validate_mod_file_name((string) $request->get_param('fileName'));
+        $chunk_index = (int) $request->get_param('chunkIndex');
+        $total_chunks = (int) $request->get_param('totalChunks');
+        $files = $request->get_file_params();
+        $file = $files['chunk'] ?? null;
+
+        if ($upload_id === '') {
+            throw new RuntimeException('Missing upload id.');
+        }
+
+        if ($total_chunks < 1 || $total_chunks > 100000 || $chunk_index < 0 || $chunk_index >= $total_chunks) {
+            throw new RuntimeException('Invalid upload chunk index.');
+        }
+
+        if (!is_array($file)) {
+            throw new RuntimeException('Missing upload chunk.');
+        }
+
+        if ((int) ($file['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {
+            throw new RuntimeException(hellas_launcher_1211_handle_upload_error((int) ($file['error'] ?? UPLOAD_ERR_NO_FILE)));
+        }
+
+        if (empty($file['tmp_name']) || !is_uploaded_file($file['tmp_name'])) {
+            throw new RuntimeException('Upload chunk validation failed.');
+        }
+
+        $chunk_dir = hellas_launcher_1211_chunk_dir();
+        hellas_launcher_1211_cleanup_old_chunks($chunk_dir['path']);
+
+        $session_dir = trailingslashit($chunk_dir['path']) . $upload_id;
+        if (!wp_mkdir_p($session_dir)) {
+            throw new RuntimeException('Could not create upload session directory.');
+        }
+
+        $meta = [
+            'fileName' => $file_name,
+            'totalChunks' => $total_chunks,
+            'updatedAt' => time(),
+        ];
+        file_put_contents(trailingslashit($session_dir) . 'upload.json', wp_json_encode($meta));
+
+        $chunk_path = trailingslashit($session_dir) . sprintf('%06d.part', $chunk_index);
+        if (file_exists($chunk_path)) {
+            unlink($chunk_path);
+        }
+
+        if (!move_uploaded_file($file['tmp_name'], $chunk_path)) {
+            throw new RuntimeException('Could not store upload chunk.');
+        }
+
+        $received_chunks = 0;
+        for ($index = 0; $index < $total_chunks; $index++) {
+            if (is_file(trailingslashit($session_dir) . sprintf('%06d.part', $index))) {
+                $received_chunks++;
+            }
+        }
+
+        if ($received_chunks < $total_chunks) {
+            return rest_ensure_response([
+                'complete' => false,
+                'receivedChunks' => $received_chunks,
+                'totalChunks' => $total_chunks,
+            ]);
+        }
+
+        $upload_dir = hellas_launcher_1211_upload_dir();
+        $destination = trailingslashit($upload_dir['path']) . $file_name;
+        $temporary_destination = $destination . '.uploading-' . $upload_id;
+        $output = fopen($temporary_destination, 'wb');
+
+        if (!$output) {
+            throw new RuntimeException('Could not assemble uploaded file.');
+        }
+
+        try {
+            for ($index = 0; $index < $total_chunks; $index++) {
+                $part_path = trailingslashit($session_dir) . sprintf('%06d.part', $index);
+                $input = fopen($part_path, 'rb');
+                if (!$input) {
+                    throw new RuntimeException('Could not read upload chunk.');
+                }
+                stream_copy_to_stream($input, $output);
+                fclose($input);
+            }
+        } finally {
+            fclose($output);
+        }
+
+        if (file_exists($destination) && !unlink($destination)) {
+            unlink($temporary_destination);
+            throw new RuntimeException('Could not replace existing uploaded mod file.');
+        }
+
+        if (!rename($temporary_destination, $destination)) {
+            unlink($temporary_destination);
+            throw new RuntimeException('Could not publish uploaded mod file.');
+        }
+
+        if ((int) filesize($destination) <= 0) {
+            unlink($destination);
+            throw new RuntimeException('Uploaded mod file is empty.');
+        }
+
+        $manifest = hellas_launcher_1211_add_mod_to_manifest(
+            hellas_launcher_1211_manifest(),
+            hellas_launcher_1211_mod_entry($upload_dir, $file_name, $destination)
+        );
+        hellas_launcher_1211_save_manifest($manifest);
+        hellas_launcher_1211_remove_directory($session_dir, $chunk_dir['path']);
+
+        return rest_ensure_response([
+            'complete' => true,
+            'mod' => hellas_launcher_1211_mod_entry($upload_dir, $file_name, $destination),
+        ]);
+    } catch (Throwable $error) {
+        return new WP_Error('hellas_chunk_upload_failed', $error->getMessage(), ['status' => 400]);
+    }
+}
 
 function hellas_launcher_1211_register_routes(): void
 {
@@ -403,6 +792,14 @@ function hellas_launcher_1211_register_routes(): void
             }
             return rest_ensure_response($profile);
         },
+    ]);
+
+    register_rest_route('hellas-launcher-1211/v1', '/upload-chunk', [
+        'methods' => 'POST',
+        'permission_callback' => static function () {
+            return current_user_can('manage_options');
+        },
+        'callback' => 'hellas_launcher_1211_rest_upload_chunk',
     ]);
 
 }
