@@ -7,6 +7,8 @@ const AdmZip = require('adm-zip');
 const { LEGACY_PROFILE_ID, getProfile, getProfileEnv, getProfileLoader } = require('./profiles');
 
 const DEFAULT_PACK_URL = 'https://hellasregion.com/download/launcher/latest/compact';
+const CURSEFORGE_API_BASE = 'https://api.curseforge.com/v1';
+const CURSEFORGE_MINECRAFT_GAME_ID = 432;
 const PROGRESS_PHASE_DOWNLOAD = 80; // percent allocated to download progress
 const MODPACK_DIR_NAME = 'modpack';
 const MODS_DIR_NAME = 'mods';
@@ -114,6 +116,101 @@ function downloadIdFromUrl(url) {
   return '';
 }
 
+function curseForgeDetailsFromUrl(url) {
+  try {
+    const parsed = new URL(url);
+    if (!/(^|\.)curseforge\.com$/i.test(parsed.hostname)) {
+      return null;
+    }
+
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    const fileMarkerIndex = segments.findIndex((segment) => ['download', 'files'].includes(segment.toLowerCase()));
+    const fileId = fileMarkerIndex >= 0 ? segments.slice(fileMarkerIndex + 1).find((segment) => /^\d+$/.test(segment)) : '';
+    const slug = fileMarkerIndex >= 1 ? segments[fileMarkerIndex - 1] : '';
+
+    if (!fileId) {
+      return null;
+    }
+
+    return { slug, fileId };
+  } catch {
+    return null;
+  }
+}
+
+function getCurseForgeApiKey() {
+  return normalizeString(process.env.CURSEFORGE_API_KEY || process.env.CF_API_KEY);
+}
+
+async function fetchCurseForgeJson(url, apiKey, abortSignal) {
+  const response = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+      'x-api-key': apiKey
+    },
+    signal: abortSignal
+  });
+
+  if (!response.ok) {
+    throw new Error(`CurseForge API request failed (${response.status})`);
+  }
+
+  return response.json();
+}
+
+async function resolveCurseForgeProjectId(slug, apiKey, abortSignal) {
+  if (!slug) {
+    return null;
+  }
+
+  const url = `${CURSEFORGE_API_BASE}/mods/search?gameId=${CURSEFORGE_MINECRAFT_GAME_ID}&slug=${encodeURIComponent(
+    slug
+  )}&pageSize=10`;
+  const payload = await fetchCurseForgeJson(url, apiKey, abortSignal);
+  const mods = Array.isArray(payload?.data) ? payload.data : [];
+  const exact = mods.find((mod) => normalizeString(mod.slug).toLowerCase() === slug.toLowerCase());
+  return exact?.id || mods[0]?.id || null;
+}
+
+async function resolveCurseForgeDownloadUrl(item, abortSignal) {
+  const details = curseForgeDetailsFromUrl(item.url);
+  const curseForge = item.curseForge || item.curseforge || {};
+  const fileId = normalizeString(curseForge.fileId || item.fileId || details?.fileId);
+  let projectId = normalizeString(curseForge.projectId || curseForge.modId || item.projectId || item.modId);
+  const slug = normalizeString(curseForge.slug || item.slug || details?.slug || item.id);
+
+  if (!fileId && !details) {
+    return null;
+  }
+
+  const apiKey = getCurseForgeApiKey();
+  if (!apiKey) {
+    throw new Error(
+      `CurseForge blocked ${item.fileName} (403). Use a direct WordPress-hosted file URL or set CURSEFORGE_API_KEY.`
+    );
+  }
+
+  if (!projectId) {
+    projectId = await resolveCurseForgeProjectId(slug, apiKey, abortSignal);
+  }
+
+  if (!projectId || !fileId) {
+    throw new Error(`Could not resolve CurseForge project/file id for ${item.fileName}.`);
+  }
+
+  const payload = await fetchCurseForgeJson(
+    `${CURSEFORGE_API_BASE}/mods/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download-url`,
+    apiKey,
+    abortSignal
+  );
+  const downloadUrl = normalizeString(payload?.data);
+  if (!downloadUrl) {
+    throw new Error(`CurseForge did not return a download URL for ${item.fileName}.`);
+  }
+
+  return downloadUrl;
+}
+
 function fileNameFromUrl(url, fallbackName) {
   try {
     const parsed = new URL(url);
@@ -167,6 +264,10 @@ function normalizeDownloadItem(item, index, fallbackDirectory) {
     sha256: normalizeString(item.sha256 || item.hash) || null,
     directory: normalizeString(item.directory || item.targetDirectory) || fallbackDirectory,
     target: normalizeString(item.target || item.path) || null,
+    curseForge: item.curseForge || item.curseforge || null,
+    slug: normalizeString(item.slug) || null,
+    projectId: normalizeString(item.projectId || item.modId) || null,
+    fileId: normalizeString(item.fileId) || null,
     required: item.required !== false
   };
 }
@@ -454,10 +555,20 @@ async function downloadFile(item, destinationPath, progressCallback, abortSignal
     return;
   }
 
-  const response = await fetch(item.url, {
+  let response = await fetch(item.url, {
     headers: { 'Cache-Control': 'no-cache' },
     signal: abortSignal
   });
+
+  if (!response.ok) {
+    const curseForgeDownloadUrl = response.status === 403 ? await resolveCurseForgeDownloadUrl(item, abortSignal) : null;
+    if (curseForgeDownloadUrl) {
+      response = await fetch(curseForgeDownloadUrl, {
+        headers: { 'Cache-Control': 'no-cache' },
+        signal: abortSignal
+      });
+    }
+  }
 
   if (!response.ok) {
     throw new Error(`Failed to download ${item.fileName} (${response.status})`);
@@ -532,6 +643,22 @@ async function downloadFile(item, destinationPath, progressCallback, abortSignal
   progressCallback({ state: 'downloading', progress: Math.min(99, progressBase + progressSpan) });
 }
 
+function formatDownloadFailures(failures) {
+  const requiredFailures = failures.filter((failure) => failure.item.required !== false);
+  const displayed = failures
+    .slice(0, 8)
+    .map((failure) => `${failure.item.fileName}: ${failure.error.message.replace(/[.]+$/g, '')}`)
+    .join('; ');
+  const suffix = failures.length > 8 ? `; plus ${failures.length - 8} more` : '';
+  const curseForgeCount = failures.filter((failure) => curseForgeDetailsFromUrl(failure.item.url)).length;
+  const requiredPrefix = requiredFailures.length ? `${requiredFailures.length} required download(s) failed` : 'Downloads failed';
+  const curseForgeHint = curseForgeCount
+    ? ' CurseForge web download pages return 403 to launchers; use WordPress-hosted direct file URLs or set CURSEFORGE_API_KEY/CF_API_KEY.'
+    : '';
+
+  return `${requiredPrefix}: ${displayed}${suffix}.${curseForgeHint}`;
+}
+
 async function removeOwnedFiles(modpackDir, trackerFileName, desiredItems) {
   const trackerPath = path.join(modpackDir, trackerFileName);
   const previous = await readJsonFile(trackerPath, { files: [] });
@@ -565,6 +692,7 @@ async function installTrackedFiles(modpackDir, trackerFileName, items, progressC
   const span = Math.max(1, end - start);
   const itemSpan = prepared.length ? Math.max(1, Math.floor(span / prepared.length)) : span;
   const installed = [];
+  const failures = [];
 
   for (const [index, item] of prepared.entries()) {
     const progressBase = Math.min(end - 1, start + index * itemSpan);
@@ -574,20 +702,46 @@ async function installTrackedFiles(modpackDir, trackerFileName, items, progressC
       progress: progressBase,
       message: `Downloading ${item.fileName}`
     });
-    await downloadFile(item, destinationPath, progressCallback, abortSignal, progressBase, itemSpan);
-    installed.push({
-      id: item.id,
-      url: item.url,
-      fileName: item.fileName,
-      targetPath: item.targetPath,
-      sha256: item.sha256 || null
-    });
+    try {
+      await downloadFile(item, destinationPath, progressCallback, abortSignal, progressBase, itemSpan);
+      installed.push({
+        id: item.id,
+        url: item.url,
+        fileName: item.fileName,
+        targetPath: item.targetPath,
+        sha256: item.sha256 || null
+      });
+    } catch (error) {
+      const existingFilePresent = await fs.promises
+        .access(destinationPath)
+        .then(() => true)
+        .catch(() => false);
+      if (existingFilePresent) {
+        installed.push({
+          id: item.id,
+          url: item.url,
+          fileName: item.fileName,
+          targetPath: item.targetPath,
+          sha256: item.sha256 || null
+        });
+      }
+      failures.push({ item, error });
+      progressCallback({
+        state: 'warning',
+        progress: Math.min(99, progressBase + itemSpan),
+        message: `Skipped ${item.fileName}: ${error.message}`
+      });
+    }
   }
 
   await writeJsonFile(path.join(modpackDir, trackerFileName), {
     updatedAt: new Date().toISOString(),
     files: installed
   });
+
+  if (failures.some((failure) => failure.item.required !== false)) {
+    throw new Error(formatDownloadFailures(failures));
+  }
 }
 
 async function installManifestUpdate(resolved, targetDir, progressCallback, abortSignal, options = {}) {
