@@ -36,4 +36,29 @@ The profile can provide individual managed mod links:
 }
 ```
 
+## Uploading Mods
+
+The settings page includes an **Upload MC 1.21.1 Mods** area.
+
+Uploaded `.jar` and `.zip` files are saved under:
+
+```text
+wp-content/uploads/hellas-launcher/1.21.1/mods
+```
+
+Each uploaded file is automatically added to:
+
+```text
+profiles.mc-1.21.1.mods
+```
+
+The plugin stores:
+
+- `id`
+- `fileName`
+- `url`
+- `sha256`
+
+The plugin does not impose an additional file size limit. Browser uploads are still limited by PHP, WordPress, and web server settings such as `upload_max_filesize`, `post_max_size`, Nginx `client_max_body_size`, Apache limits, or host-level limits.
+
 Configure the launcher with `PACK_MANIFEST_URL_1_21_1=https://example.com/wp-json/hellas-launcher-1211/v1/manifest`.
