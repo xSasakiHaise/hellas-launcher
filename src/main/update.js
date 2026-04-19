@@ -626,6 +626,51 @@ async function removeOwnedFiles(modpackDir, trackerFileName, desiredItems) {
   }
 }
 
+function buildPreviousFileMap(previousTracker) {
+  const map = new Map();
+  for (const file of previousTracker.files || []) {
+    const targetPath = normalizeString(file.targetPath);
+    if (!targetPath) {
+      continue;
+    }
+    map.set(targetPath, {
+      id: normalizeString(file.id),
+      url: normalizeString(file.url),
+      fileName: normalizeString(file.fileName),
+      targetPath,
+      sha256: normalizeString(file.sha256)
+    });
+  }
+
+  return map;
+}
+
+async function canReuseExistingDownload(modpackDir, item, previousFileMap) {
+  if (item.sha256) {
+    return false;
+  }
+
+  const previous = previousFileMap.get(item.targetPath);
+  if (!previous) {
+    return false;
+  }
+
+  const sameDownload =
+    previous.url === item.url &&
+    previous.fileName === item.fileName &&
+    previous.id === item.id &&
+    previous.targetPath === item.targetPath;
+  if (!sameDownload) {
+    return false;
+  }
+
+  const destinationPath = path.join(modpackDir, item.targetPath);
+  return fs.promises
+    .stat(destinationPath)
+    .then((stats) => stats.isFile() && stats.size > 0)
+    .catch(() => false);
+}
+
 async function installTrackedFiles(modpackDir, trackerFileName, items, progressCallback, abortSignal, start, end, options = {}) {
   const prepared = items.map((item) => {
     const targetPath = item.target
@@ -638,6 +683,8 @@ async function installTrackedFiles(modpackDir, trackerFileName, items, progressC
     };
   });
 
+  const previousTracker = await readJsonFile(path.join(modpackDir, trackerFileName), { files: [] });
+  const previousFileMap = buildPreviousFileMap(previousTracker);
   await removeOwnedFiles(modpackDir, trackerFileName, prepared);
 
   const span = Math.max(1, end - start);
@@ -654,7 +701,16 @@ async function installTrackedFiles(modpackDir, trackerFileName, items, progressC
       message: `Downloading ${item.fileName}`
     });
     try {
-      await downloadFile(item, destinationPath, progressCallback, abortSignal, progressBase, itemSpan, options);
+      const reusedExisting = await canReuseExistingDownload(modpackDir, item, previousFileMap);
+      if (reusedExisting) {
+        progressCallback({
+          state: 'downloading',
+          progress: Math.min(99, progressBase + itemSpan),
+          message: `Using existing ${item.fileName}`
+        });
+      } else {
+        await downloadFile(item, destinationPath, progressCallback, abortSignal, progressBase, itemSpan, options);
+      }
       installed.push({
         id: item.id,
         url: item.url,
