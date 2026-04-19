@@ -37,6 +37,7 @@ let launchInProgress = false;
 let logWindow;
 const behaviorLog = [];
 let behaviorLogWritten = false;
+const CURSEFORGE_BROWSER_RESOLVE_TIMEOUT_MS = 30000;
 
 function recordBehavior(event, details = {}) {
   behaviorLog.push({ timestamp: new Date().toISOString(), event, ...details });
@@ -67,6 +68,103 @@ function flushBehaviorLog() {
   } catch (error) {
     console.warn('Failed to write behavior log', error);
   }
+}
+
+function isForgeCdnArchiveUrl(url) {
+  try {
+    const parsed = new URL(url);
+    return /(^|\.)forgecdn\.net$/i.test(parsed.hostname) && /\.(jar|zip)$/i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+}
+
+function resolveCurseForgeDownloadInBrowser(item, details, abortSignal) {
+  return new Promise((resolve, reject) => {
+    const fileLabel = item?.fileName || details?.fileId || 'CurseForge file';
+    const partition = `hellas-cf-download-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const browser = new BrowserWindow({
+      show: false,
+      width: 1280,
+      height: 900,
+      webPreferences: {
+        partition,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true
+      }
+    });
+    const session = browser.webContents.session;
+    let settled = false;
+
+    const finish = (error, downloadUrl) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      if (abortSignal) {
+        abortSignal.removeEventListener('abort', onAbort);
+      }
+      session.webRequest.onBeforeRequest({ urls: ['*://*.forgecdn.net/*'] }, null);
+      if (!browser.isDestroyed()) {
+        browser.destroy();
+      }
+      if (error) {
+        reject(error);
+      } else {
+        resolve(downloadUrl);
+      }
+    };
+
+    const onAbort = () => finish(new Error('CurseForge browser download resolving cancelled.'));
+    const timeout = setTimeout(
+      () => finish(new Error(`Timed out waiting for CurseForge browser download for ${fileLabel}.`)),
+      CURSEFORGE_BROWSER_RESOLVE_TIMEOUT_MS
+    );
+
+    if (abortSignal) {
+      if (abortSignal.aborted) {
+        finish(new Error('CurseForge browser download resolving cancelled.'));
+        return;
+      }
+      abortSignal.addEventListener('abort', onAbort, { once: true });
+    }
+
+    session.webRequest.onBeforeRequest({ urls: ['*://*.forgecdn.net/*'] }, (request, callback) => {
+      if (isForgeCdnArchiveUrl(request.url)) {
+        callback({ cancel: true });
+        finish(null, request.url);
+        return;
+      }
+      callback({});
+    });
+
+    session.on('will-download', (event, downloadItem) => {
+      const urlChain = downloadItem.getURLChain();
+      const downloadUrl = urlChain.length ? urlChain[urlChain.length - 1] : downloadItem.getURL();
+      event.preventDefault();
+      if (downloadUrl) {
+        finish(null, downloadUrl);
+      }
+    });
+
+    browser.webContents.on('did-fail-load', (_event, errorCode, errorDescription, validatedUrl, isMainFrame) => {
+      if (isMainFrame && errorCode !== -3) {
+        logMessage('warn', 'CurseForge browser page load failed', {
+          fileName: fileLabel,
+          errorCode,
+          errorDescription,
+          url: validatedUrl
+        });
+      }
+    });
+
+    browser.webContents.setUserAgent(
+      'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36'
+    );
+    browser
+      .loadURL(item.url)
+      .catch((error) => finish(new Error(`Failed to open CurseForge download page for ${fileLabel}: ${error.message}`)));
+  });
 }
 
 function setUpdateInProgress(value) {
@@ -673,7 +771,8 @@ ipcMain.handle('hellas:poll-device-login', async (_event, payload) => {
       const result = await runUpdateTask((signal) =>
         downloadAndExtractUpdate(updateSource, dir, sendUpdateProgress, signal, {
           profile,
-          additionalMods: getAdditionalMods(profile)
+          additionalMods: getAdditionalMods(profile),
+          resolveCurseForgeDownloadUrl: resolveCurseForgeDownloadInBrowser
         })
       );
 
@@ -839,7 +938,8 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       const result = await runUpdateTask((signal) =>
         downloadAndExtractUpdate(updateSource, installDir, sendUpdateProgress, signal, {
           profile,
-          additionalMods: getAdditionalMods(profile)
+          additionalMods: getAdditionalMods(profile),
+          resolveCurseForgeDownloadUrl: resolveCurseForgeDownloadInBrowser
         })
       );
 
@@ -887,7 +987,8 @@ ipcMain.handle('hellas:cancel-launch', async () => {
       const result = await runUpdateTask((signal) =>
         freshReinstall(installDir, sendUpdateProgress, signal, {
           profile,
-          additionalMods: getAdditionalMods(profile)
+          additionalMods: getAdditionalMods(profile),
+          resolveCurseForgeDownloadUrl: resolveCurseForgeDownloadInBrowser
         })
       );
 

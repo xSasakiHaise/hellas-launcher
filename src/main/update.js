@@ -7,8 +7,6 @@ const AdmZip = require('adm-zip');
 const { LEGACY_PROFILE_ID, getProfile, getProfileEnv, getProfileLoader } = require('./profiles');
 
 const DEFAULT_PACK_URL = 'https://hellasregion.com/download/launcher/latest/compact';
-const CURSEFORGE_API_BASE = 'https://api.curseforge.com/v1';
-const CURSEFORGE_MINECRAFT_GAME_ID = 432;
 const PROGRESS_PHASE_DOWNLOAD = 80; // percent allocated to download progress
 const MODPACK_DIR_NAME = 'modpack';
 const MODS_DIR_NAME = 'mods';
@@ -138,74 +136,25 @@ function curseForgeDetailsFromUrl(url) {
   }
 }
 
-function getCurseForgeApiKey() {
-  return normalizeString(process.env.CURSEFORGE_API_KEY || process.env.CF_API_KEY);
-}
-
-async function fetchCurseForgeJson(url, apiKey, abortSignal) {
-  const response = await fetch(url, {
-    headers: {
-      Accept: 'application/json',
-      'x-api-key': apiKey
-    },
-    signal: abortSignal
-  });
-
-  if (!response.ok) {
-    throw new Error(`CurseForge API request failed (${response.status})`);
-  }
-
-  return response.json();
-}
-
-async function resolveCurseForgeProjectId(slug, apiKey, abortSignal) {
-  if (!slug) {
-    return null;
-  }
-
-  const url = `${CURSEFORGE_API_BASE}/mods/search?gameId=${CURSEFORGE_MINECRAFT_GAME_ID}&slug=${encodeURIComponent(
-    slug
-  )}&pageSize=10`;
-  const payload = await fetchCurseForgeJson(url, apiKey, abortSignal);
-  const mods = Array.isArray(payload?.data) ? payload.data : [];
-  const exact = mods.find((mod) => normalizeString(mod.slug).toLowerCase() === slug.toLowerCase());
-  return exact?.id || mods[0]?.id || null;
-}
-
-async function resolveCurseForgeDownloadUrl(item, abortSignal) {
+async function resolveCurseForgeDownloadUrl(item, options, abortSignal, progressCallback, progressBase) {
   const details = curseForgeDetailsFromUrl(item.url);
-  const curseForge = item.curseForge || item.curseforge || {};
-  const fileId = normalizeString(curseForge.fileId || item.fileId || details?.fileId);
-  let projectId = normalizeString(curseForge.projectId || curseForge.modId || item.projectId || item.modId);
-  const slug = normalizeString(curseForge.slug || item.slug || details?.slug || item.id);
-
-  if (!fileId && !details) {
+  if (!details) {
     return null;
   }
 
-  const apiKey = getCurseForgeApiKey();
-  if (!apiKey) {
-    throw new Error(
-      `CurseForge blocked ${item.fileName} (403). Use a direct WordPress-hosted file URL or set CURSEFORGE_API_KEY.`
-    );
+  const resolver = options?.resolveCurseForgeDownloadUrl;
+  if (typeof resolver !== 'function') {
+    throw new Error(`CurseForge blocked ${item.fileName} (403) and browser download resolving is unavailable.`);
   }
 
-  if (!projectId) {
-    projectId = await resolveCurseForgeProjectId(slug, apiKey, abortSignal);
-  }
-
-  if (!projectId || !fileId) {
-    throw new Error(`Could not resolve CurseForge project/file id for ${item.fileName}.`);
-  }
-
-  const payload = await fetchCurseForgeJson(
-    `${CURSEFORGE_API_BASE}/mods/${encodeURIComponent(projectId)}/files/${encodeURIComponent(fileId)}/download-url`,
-    apiKey,
-    abortSignal
-  );
-  const downloadUrl = normalizeString(payload?.data);
+  progressCallback({
+    state: 'downloading',
+    progress: Math.min(99, progressBase),
+    message: `Resolving CurseForge download for ${item.fileName}`
+  });
+  const downloadUrl = normalizeString(await resolver(item, details, abortSignal));
   if (!downloadUrl) {
-    throw new Error(`CurseForge did not return a download URL for ${item.fileName}.`);
+    throw new Error(`CurseForge did not expose a browser download URL for ${item.fileName}.`);
   }
 
   return downloadUrl;
@@ -264,7 +213,6 @@ function normalizeDownloadItem(item, index, fallbackDirectory) {
     sha256: normalizeString(item.sha256 || item.hash) || null,
     directory: normalizeString(item.directory || item.targetDirectory) || fallbackDirectory,
     target: normalizeString(item.target || item.path) || null,
-    curseForge: item.curseForge || item.curseforge || null,
     slug: normalizeString(item.slug) || null,
     projectId: normalizeString(item.projectId || item.modId) || null,
     fileId: normalizeString(item.fileId) || null,
@@ -539,7 +487,7 @@ function safeRelativePath(relativePath) {
   return normalized;
 }
 
-async function downloadFile(item, destinationPath, progressCallback, abortSignal, progressBase, progressSpan) {
+async function downloadFile(item, destinationPath, progressCallback, abortSignal, progressBase, progressSpan, options = {}) {
   ensureNotCancelled(abortSignal);
   validateHttpUrl(item.url);
 
@@ -561,7 +509,10 @@ async function downloadFile(item, destinationPath, progressCallback, abortSignal
   });
 
   if (!response.ok) {
-    const curseForgeDownloadUrl = response.status === 403 ? await resolveCurseForgeDownloadUrl(item, abortSignal) : null;
+    const curseForgeDownloadUrl =
+      response.status === 403
+        ? await resolveCurseForgeDownloadUrl(item, options, abortSignal, progressCallback, progressBase)
+        : null;
     if (curseForgeDownloadUrl) {
       response = await fetch(curseForgeDownloadUrl, {
         headers: { 'Cache-Control': 'no-cache' },
@@ -653,7 +604,7 @@ function formatDownloadFailures(failures) {
   const curseForgeCount = failures.filter((failure) => curseForgeDetailsFromUrl(failure.item.url)).length;
   const requiredPrefix = requiredFailures.length ? `${requiredFailures.length} required download(s) failed` : 'Downloads failed';
   const curseForgeHint = curseForgeCount
-    ? ' CurseForge web download pages return 403 to launchers; use WordPress-hosted direct file URLs or set CURSEFORGE_API_KEY/CF_API_KEY.'
+    ? ' CurseForge web download pages returned 403 or did not expose a browser download URL; use WordPress-hosted direct file URLs for any remaining failures.'
     : '';
 
   return `${requiredPrefix}: ${displayed}${suffix}.${curseForgeHint}`;
@@ -675,7 +626,7 @@ async function removeOwnedFiles(modpackDir, trackerFileName, desiredItems) {
   }
 }
 
-async function installTrackedFiles(modpackDir, trackerFileName, items, progressCallback, abortSignal, start, end) {
+async function installTrackedFiles(modpackDir, trackerFileName, items, progressCallback, abortSignal, start, end, options = {}) {
   const prepared = items.map((item) => {
     const targetPath = item.target
       ? safeRelativePath(item.target)
@@ -703,7 +654,7 @@ async function installTrackedFiles(modpackDir, trackerFileName, items, progressC
       message: `Downloading ${item.fileName}`
     });
     try {
-      await downloadFile(item, destinationPath, progressCallback, abortSignal, progressBase, itemSpan);
+      await downloadFile(item, destinationPath, progressCallback, abortSignal, progressBase, itemSpan, options);
       installed.push({
         id: item.id,
         url: item.url,
@@ -762,7 +713,7 @@ async function installManifestUpdate(resolved, targetDir, progressCallback, abor
   progressCallback({ state: 'downloading', progress: 1, message: 'Downloading managed mods' });
 
   if (managedItems.length) {
-    await installTrackedFiles(modpackDir, MANAGED_MODS_FILENAME, managedItems, progressCallback, abortSignal, 5, 80);
+    await installTrackedFiles(modpackDir, MANAGED_MODS_FILENAME, managedItems, progressCallback, abortSignal, 5, 80, options);
   } else {
     await writeJsonFile(path.join(modpackDir, MANAGED_MODS_FILENAME), {
       updatedAt: new Date().toISOString(),
@@ -771,7 +722,7 @@ async function installManifestUpdate(resolved, targetDir, progressCallback, abor
   }
 
   if (userItems.length) {
-    await installTrackedFiles(modpackDir, USER_MODS_FILENAME, userItems, progressCallback, abortSignal, 80, 95);
+    await installTrackedFiles(modpackDir, USER_MODS_FILENAME, userItems, progressCallback, abortSignal, 80, 95, options);
   } else {
     await removeOwnedFiles(modpackDir, USER_MODS_FILENAME, []);
     await writeJsonFile(path.join(modpackDir, USER_MODS_FILENAME), {
