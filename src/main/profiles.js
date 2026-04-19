@@ -11,6 +11,9 @@ const PROFILE_DEFINITIONS = [
     forgeVersion: '1.16.5-36.2.42',
     manifestKey: '1.16.5',
     legacy: true,
+    update: {
+      url: 'https://hellasregion.com/download/launcher/latest/compact'
+    },
     java: {
       major: 8,
       allowedMajors: [8, 11],
@@ -25,6 +28,9 @@ const PROFILE_DEFINITIONS = [
     forgeVersion: '1.21.1-52.1.0',
     manifestKey: '1.21.1',
     installDirName: path.join('profiles', 'mc-1.21.1'),
+    update: {
+      manifestUrl: 'https://hellasregion.com/wp-json/hellas-launcher-1211/v1/manifest'
+    },
     java: {
       major: 21,
       allowedMajors: [21],

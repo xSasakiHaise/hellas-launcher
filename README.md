@@ -63,7 +63,19 @@ Important variables:
 - `MC_MEMORY_MIN`
 - `MC_MEMORY_MAX`
 
-Leave `PACK_MANIFEST_URL` blank unless you intentionally want one manifest to serve every profile. With this WordPress plugin, use `PACK_MANIFEST_URL_1_21_1` so MC 1.16.5 remains governed by the old plugin. If no update URL is set, MC 1.16.5 falls back to the built-in compact pack URL used by `1.0.0`.
+Leave `PACK_MANIFEST_URL` blank unless you intentionally want one manifest to serve every profile. With this WordPress plugin, use `PACK_MANIFEST_URL_1_21_1` so MC 1.16.5 remains governed by the old plugin. MC 1.16.5 falls back to the built-in compact pack URL used by `1.0.0`; MC 1.21.1 falls back to `https://hellasregion.com/wp-json/hellas-launcher-1211/v1/manifest`.
+
+## Signing
+
+Windows release signing requires a trusted code-signing certificate. Electron Builder will sign the portable EXE when these environment variables are set:
+
+```powershell
+$env:CSC_LINK="C:\path\to\certificate.pfx"
+$env:CSC_KEY_PASSWORD="certificate-password"
+.\build.ps1 -RequireSigned
+```
+
+Without a trusted certificate the build still succeeds, but Windows will report the EXE as unsigned. `.\build.ps1 -RequireSigned` fails the build if `dist\Hellas Launcher.exe` is not signed.
 
 ## Development
 

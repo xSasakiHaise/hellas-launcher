@@ -33,9 +33,9 @@ function hasSource(source) {
 
 function resolveUpdateSource(profileInput = LEGACY_PROFILE_ID) {
   const profile = getProfile(profileInput?.id || profileInput);
-  const manifestUrl = getProfileEnv(profile, 'PACK_MANIFEST_URL');
-  const feedUrl = getProfileEnv(profile, 'PACK_FEED_URL');
-  const directUrl = getProfileEnv(profile, 'PACK_ZIP_URL');
+  const manifestUrl = getProfileEnv(profile, 'PACK_MANIFEST_URL') || profile.update?.manifestUrl || '';
+  const feedUrl = getProfileEnv(profile, 'PACK_FEED_URL') || profile.update?.feedUrl || '';
+  const directUrl = getProfileEnv(profile, 'PACK_ZIP_URL') || profile.update?.url || '';
 
   if (manifestUrl) {
     return {
