@@ -59,7 +59,9 @@ The plugin stores:
 - `url`
 - `sha256`
 
-The primary uploader sends every selected file in 5 MB chunks through:
+When a new upload looks like a newer version of an existing mod, the old manifest entry is removed and the older uploaded file is deleted from the plugin upload folder. For example, `hellasforms-2.8.1.jar` is replaced by `hellasforms-2.8.2.jar` instead of leaving both installed.
+
+The primary uploader sends every selected file in server-sized chunks through:
 
 ```text
 /wp-json/hellas-launcher-1211/v1/upload-chunk
@@ -67,6 +69,6 @@ The primary uploader sends every selected file in 5 MB chunks through:
 
 This avoids one large all-or-nothing POST and makes batches of many mods more reliable. Keep the admin page open until each selected file shows as completed.
 
-The plugin does not impose an overall file size limit. Each request is still limited by PHP, WordPress, and web server settings such as `upload_max_filesize`, `post_max_size`, Nginx `client_max_body_size`, Apache limits, or host-level limits. Because the chunk size is 5 MB, those server limits must allow requests slightly larger than 5 MB.
+The plugin does not impose an overall file size limit. Each request is still limited by PHP, WordPress, and web server settings such as `upload_max_filesize`, `post_max_size`, Nginx `client_max_body_size`, Apache limits, or host-level limits. The plugin chooses a chunk size below the current WordPress-reported upload limit, up to 1 MB per chunk.
 
 Configure the launcher with `PACK_MANIFEST_URL_1_21_1=https://example.com/wp-json/hellas-launcher-1211/v1/manifest`.

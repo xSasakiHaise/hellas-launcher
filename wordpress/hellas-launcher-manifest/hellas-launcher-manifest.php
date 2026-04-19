@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Hellas Launcher Manifest
  * Description: Stores the Hellas Launcher MC 1.21.1 manifest and per-file mod download links.
- * Version: 1.0.2
+ * Version: 1.0.3
  * Author: Hephaestus Forge
  */
 
@@ -13,7 +13,24 @@ if (!defined('ABSPATH')) {
 const HELLAS_LAUNCHER_1211_MANIFEST_OPTION = 'hellas_launcher_1211_manifest_json';
 const HELLAS_LAUNCHER_1211_LEGACY_OPTION = 'hellas_launcher_manifest_json';
 const HELLAS_LAUNCHER_1211_UPLOAD_ACTION = 'hellas_launcher_1211_upload_mods';
-const HELLAS_LAUNCHER_1211_CHUNK_BYTES = 5242880;
+const HELLAS_LAUNCHER_1211_MAX_CHUNK_BYTES = 1048576;
+const HELLAS_LAUNCHER_1211_MIN_CHUNK_BYTES = 262144;
+
+function hellas_launcher_1211_chunk_bytes(): int
+{
+    $reported_limit = function_exists('wp_max_upload_size') ? (int) wp_max_upload_size() : 0;
+    $target = HELLAS_LAUNCHER_1211_MAX_CHUNK_BYTES;
+
+    if ($reported_limit > 0) {
+        $safe_limit = $reported_limit - 131072;
+        if ($safe_limit < HELLAS_LAUNCHER_1211_MIN_CHUNK_BYTES) {
+            $safe_limit = max(65536, (int) floor($reported_limit * 0.5));
+        }
+        $target = min($target, $safe_limit);
+    }
+
+    return max(65536, $target);
+}
 
 function hellas_launcher_1211_default_manifest(): array
 {
@@ -165,6 +182,7 @@ function hellas_launcher_1211_render_settings_page(): void
     }
 
     $upload_limit = function_exists('wp_max_upload_size') ? size_format(wp_max_upload_size()) : 'server configured limit';
+    $chunk_bytes = hellas_launcher_1211_chunk_bytes();
     $chunk_endpoint = rest_url('hellas-launcher-1211/v1/upload-chunk');
     $chunk_nonce = wp_create_nonce('wp_rest');
     $uploaded = isset($_GET['hellas_1211_uploaded']) ? (int) $_GET['hellas_1211_uploaded'] : 0;
@@ -201,7 +219,7 @@ function hellas_launcher_1211_render_settings_page(): void
             <code>profiles.mc-1.21.1.mods</code> with URL, file name, and SHA-256.
         </p>
         <p>
-            The primary uploader sends every file in <?php echo esc_html(size_format(HELLAS_LAUNCHER_1211_CHUNK_BYTES)); ?>
+            The primary uploader sends every file in <?php echo esc_html(size_format($chunk_bytes)); ?>
             chunks, so a single failed request does not destroy the whole batch. The effective per-request limit is still
             controlled by PHP, WordPress, and the web server. Current WordPress reported limit:
             <strong><?php echo esc_html($upload_limit); ?></strong>.
@@ -210,7 +228,7 @@ function hellas_launcher_1211_render_settings_page(): void
             id="hellas-1211-uploader"
             data-endpoint="<?php echo esc_url($chunk_endpoint); ?>"
             data-nonce="<?php echo esc_attr($chunk_nonce); ?>"
-            data-chunk-size="<?php echo esc_attr((string) HELLAS_LAUNCHER_1211_CHUNK_BYTES); ?>"
+            data-chunk-size="<?php echo esc_attr((string) $chunk_bytes); ?>"
             style="border:1px solid #c3c4c7;padding:16px;background:#fff;max-width:900px;"
         >
             <input type="file" id="hellas-1211-files" accept=".jar,.zip" multiple />
@@ -245,7 +263,7 @@ function hellas_launcher_1211_render_settings_page(): void
             const list = document.getElementById('hellas-1211-upload-list');
             const endpoint = root.getAttribute('data-endpoint');
             const nonce = root.getAttribute('data-nonce');
-            const chunkSize = parseInt(root.getAttribute('data-chunk-size'), 10) || 5242880;
+            const chunkSize = parseInt(root.getAttribute('data-chunk-size'), 10) || 262144;
 
             function createRow(file) {
                 const row = document.createElement('div');
@@ -476,10 +494,61 @@ function hellas_launcher_1211_validate_mod_file_name(string $name): string
     return $file_name;
 }
 
+function hellas_launcher_1211_mod_id_from_file_name(string $file_name): string
+{
+    $base_name = pathinfo($file_name, PATHINFO_FILENAME);
+    $without_version = preg_replace('/[-_. ](?:mc)?v?\d+(?:\.\d+)+(?:[-+_. ].*)?$/i', '', $base_name);
+    $candidate = is_string($without_version) && $without_version !== '' ? $without_version : $base_name;
+    $id = sanitize_title($candidate);
+
+    return $id !== '' ? $id : sanitize_title($base_name);
+}
+
+function hellas_launcher_1211_mod_family(array $mod): string
+{
+    $file_name = (string) ($mod['fileName'] ?? '');
+    if ($file_name !== '') {
+        return hellas_launcher_1211_mod_id_from_file_name($file_name);
+    }
+
+    $url = (string) ($mod['url'] ?? '');
+    if ($url !== '') {
+        $path = (string) parse_url($url, PHP_URL_PATH);
+        $from_url = basename($path);
+        if ($from_url !== '' && preg_match('/\.(jar|zip)$/i', $from_url)) {
+            return hellas_launcher_1211_mod_id_from_file_name(rawurldecode($from_url));
+        }
+    }
+
+    return sanitize_title((string) ($mod['id'] ?? ''));
+}
+
+function hellas_launcher_1211_delete_uploaded_mod_file(array $upload_dir, array $mod, string $replacement_file_name): void
+{
+    $file_name = (string) ($mod['fileName'] ?? '');
+    if ($file_name === '' || $file_name === $replacement_file_name) {
+        return;
+    }
+
+    $candidate = realpath(trailingslashit($upload_dir['path']) . basename($file_name));
+    $root = realpath($upload_dir['path']);
+
+    if (
+        !$candidate ||
+        !$root ||
+        !is_file($candidate) ||
+        strpos($candidate, $root . DIRECTORY_SEPARATOR) !== 0
+    ) {
+        return;
+    }
+
+    unlink($candidate);
+}
+
 function hellas_launcher_1211_mod_entry(array $upload_dir, string $file_name, string $destination): array
 {
     return [
-        'id' => sanitize_title(pathinfo($file_name, PATHINFO_FILENAME)),
+        'id' => hellas_launcher_1211_mod_id_from_file_name($file_name),
         'fileName' => $file_name,
         'url' => trailingslashit($upload_dir['url']) . rawurlencode($file_name),
         'sha256' => hash_file('sha256', $destination),
@@ -506,7 +575,7 @@ function hellas_launcher_1211_uploaded_files(): array
     return $files;
 }
 
-function hellas_launcher_1211_add_mod_to_manifest(array $manifest, array $mod): array
+function hellas_launcher_1211_add_mod_to_manifest(array $manifest, array $mod, ?array $upload_dir = null): array
 {
     $manifest = hellas_launcher_1211_normalize_manifest($manifest);
     $mods = $manifest['profiles']['mc-1.21.1']['mods'] ?? [];
@@ -514,12 +583,22 @@ function hellas_launcher_1211_add_mod_to_manifest(array $manifest, array $mod): 
         $mods = [];
     }
 
-    $mods = array_values(array_filter($mods, static function ($existing) use ($mod) {
+    $replacement_family = hellas_launcher_1211_mod_family($mod);
+    $mods = array_values(array_filter($mods, static function ($existing) use ($mod, $replacement_family, $upload_dir) {
         if (!is_array($existing)) {
             return false;
         }
 
-        return ($existing['fileName'] ?? '') !== $mod['fileName'] && ($existing['id'] ?? '') !== $mod['id'];
+        $same_file = ($existing['fileName'] ?? '') === ($mod['fileName'] ?? '');
+        $same_id = ($existing['id'] ?? '') === ($mod['id'] ?? '');
+        $same_family = $replacement_family !== '' && hellas_launcher_1211_mod_family($existing) === $replacement_family;
+        $replaced = $same_file || $same_id || $same_family;
+
+        if ($replaced && $upload_dir) {
+            hellas_launcher_1211_delete_uploaded_mod_file($upload_dir, $existing, (string) ($mod['fileName'] ?? ''));
+        }
+
+        return !$replaced;
     }));
     $mods[] = $mod;
     $manifest['profiles']['mc-1.21.1']['mods'] = $mods;
@@ -583,7 +662,8 @@ function hellas_launcher_1211_handle_mod_uploads(): void
 
             $manifest = hellas_launcher_1211_add_mod_to_manifest(
                 $manifest,
-                hellas_launcher_1211_mod_entry($upload_dir, $file_name, $destination)
+                hellas_launcher_1211_mod_entry($upload_dir, $file_name, $destination),
+                $upload_dir
             );
             $uploaded_count++;
         }
@@ -757,7 +837,8 @@ function hellas_launcher_1211_rest_upload_chunk(WP_REST_Request $request)
 
         $manifest = hellas_launcher_1211_add_mod_to_manifest(
             hellas_launcher_1211_manifest(),
-            hellas_launcher_1211_mod_entry($upload_dir, $file_name, $destination)
+            hellas_launcher_1211_mod_entry($upload_dir, $file_name, $destination),
+            $upload_dir
         );
         hellas_launcher_1211_save_manifest($manifest);
         hellas_launcher_1211_remove_directory($session_dir, $chunk_dir['path']);
