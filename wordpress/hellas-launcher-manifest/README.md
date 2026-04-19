@@ -59,6 +59,16 @@ The plugin stores:
 - `url`
 - `sha256`
 
+Saved manifests are normalized on output. If an entry has an empty `fileName`, the plugin fills a stable launcher-safe name from the mod id and download id, for example:
+
+```json
+{
+  "id": "jei",
+  "fileName": "jei-7391682.jar",
+  "url": "https://www.curseforge.com/minecraft/mc-mods/jei/download/7391682"
+}
+```
+
 When a new upload looks like a newer version of an existing mod, the old manifest entry is removed and the older uploaded file is deleted from the plugin upload folder. For example, `hellasforms-2.8.1.jar` is replaced by `hellasforms-2.8.2.jar` instead of leaving both installed.
 
 The primary uploader sends every selected file in server-sized chunks through:

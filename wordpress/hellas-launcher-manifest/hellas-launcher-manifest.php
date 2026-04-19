@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Hellas Launcher Manifest
  * Description: Stores the Hellas Launcher MC 1.21.1 manifest and per-file mod download links.
- * Version: 1.0.3
+ * Version: 1.0.4
  * Author: Hephaestus Forge
  */
 
@@ -57,6 +57,105 @@ function hellas_launcher_1211_allowed_profile_ids(): array
     return ['mc-1.21.1', '1.21.1'];
 }
 
+function hellas_launcher_1211_download_id_from_url(string $url): string
+{
+    $path = (string) parse_url($url, PHP_URL_PATH);
+    $segments = array_values(array_filter(explode('/', $path), static function ($segment) {
+        return $segment !== '';
+    }));
+
+    for ($index = count($segments) - 1; $index >= 0; $index--) {
+        if (preg_match('/^\d+$/', $segments[$index])) {
+            return $segments[$index];
+        }
+    }
+
+    return '';
+}
+
+function hellas_launcher_1211_file_name_from_url(string $url): string
+{
+    $path = (string) parse_url($url, PHP_URL_PATH);
+    $base_name = sanitize_file_name(rawurldecode(basename($path)));
+
+    if ($base_name !== '' && preg_match('/\.(jar|zip)$/i', $base_name)) {
+        return $base_name;
+    }
+
+    return '';
+}
+
+function hellas_launcher_1211_infer_download_file_name(array $item, int $index, string $directory): string
+{
+    $current_name = sanitize_file_name((string) ($item['fileName'] ?? $item['filename'] ?? $item['name'] ?? ''));
+    if ($current_name !== '' && ($directory === 'files' || preg_match('/\.(jar|zip)$/i', $current_name))) {
+        return $current_name;
+    }
+
+    $url = (string) ($item['url'] ?? $item['downloadUrl'] ?? $item['link'] ?? '');
+    $from_url = $url !== '' ? hellas_launcher_1211_file_name_from_url($url) : '';
+    if ($from_url !== '') {
+        return $from_url;
+    }
+
+    if ($directory === 'files' && $url !== '') {
+        $path = (string) parse_url($url, PHP_URL_PATH);
+        $base_name = sanitize_file_name(rawurldecode(basename($path)));
+        if ($base_name !== '' && !preg_match('/^\d+$/', $base_name)) {
+            return $base_name;
+        }
+    }
+
+    $id = sanitize_title((string) ($item['id'] ?? $item['slug'] ?? ''));
+    if ($id === '') {
+        $id = $directory === 'mods' ? 'mod-' . ($index + 1) : 'file-' . ($index + 1);
+    }
+
+    $download_id = $url !== '' ? hellas_launcher_1211_download_id_from_url($url) : '';
+    $suffix = $download_id !== '' ? '-' . $download_id : '';
+    $extension = $directory === 'resourcepacks' ? '.zip' : ($directory === 'mods' ? '.jar' : '');
+
+    return $id . $suffix . $extension;
+}
+
+function hellas_launcher_1211_normalize_download_items($items, string $directory): array
+{
+    if (!is_array($items)) {
+        return [];
+    }
+
+    $normalized = [];
+    foreach (array_values($items) as $index => $item) {
+        if (!is_array($item)) {
+            if (!is_string($item) || trim($item) === '') {
+                continue;
+            }
+
+            $item = ['url' => trim($item)];
+        }
+
+        $url = (string) ($item['url'] ?? $item['downloadUrl'] ?? $item['link'] ?? '');
+        if ($url === '') {
+            continue;
+        }
+
+        $file_name = hellas_launcher_1211_infer_download_file_name($item, $index, $directory);
+        $id = sanitize_title((string) ($item['id'] ?? $item['slug'] ?? ''));
+        if ($id === '') {
+            $id = hellas_launcher_1211_mod_id_from_file_name($file_name);
+        }
+
+        $item['id'] = $id;
+        $item['fileName'] = $file_name;
+        $item['url'] = $url;
+        unset($item['filename'], $item['downloadUrl'], $item['link']);
+
+        $normalized[] = $item;
+    }
+
+    return $normalized;
+}
+
 function hellas_launcher_1211_normalize_manifest(array $manifest): array
 {
     $profiles = $manifest['profiles'] ?? [];
@@ -96,6 +195,9 @@ function hellas_launcher_1211_normalize_manifest(array $manifest): array
     $profile['minecraftVersion'] = '1.21.1';
     $profile['label'] = $profile['label'] ?? 'MC 1.21.1';
     $profile['javaMajor'] = $profile['javaMajor'] ?? 21;
+    $profile['mods'] = hellas_launcher_1211_normalize_download_items($profile['mods'] ?? [], 'mods');
+    $profile['resourcepacks'] = hellas_launcher_1211_normalize_download_items($profile['resourcepacks'] ?? [], 'resourcepacks');
+    $profile['files'] = hellas_launcher_1211_normalize_download_items($profile['files'] ?? [], 'files');
 
     return [
         'schemaVersion' => $manifest['schemaVersion'] ?? 2,

@@ -98,11 +98,27 @@ function normalizeString(value) {
   return typeof value === 'string' ? value.trim() : '';
 }
 
+function downloadIdFromUrl(url) {
+  try {
+    const parsed = new URL(url);
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    for (let index = segments.length - 1; index >= 0; index -= 1) {
+      if (/^\d+$/.test(segments[index])) {
+        return segments[index];
+      }
+    }
+  } catch {
+    // Ignore invalid URL parsing here; validation happens before download.
+  }
+
+  return '';
+}
+
 function fileNameFromUrl(url, fallbackName) {
   try {
     const parsed = new URL(url);
     const baseName = path.basename(decodeURIComponent(parsed.pathname));
-    if (baseName && baseName !== '/' && baseName !== '.') {
+    if (baseName && baseName !== '/' && baseName !== '.' && !/^\d+$/.test(baseName)) {
       return baseName;
     }
   } catch {
@@ -112,13 +128,23 @@ function fileNameFromUrl(url, fallbackName) {
   return fallbackName;
 }
 
+function fallbackFileName(id, url, index, fallbackDirectory) {
+  const downloadId = downloadIdFromUrl(url);
+  const baseName = normalizeString(id) || (fallbackDirectory === MODS_DIR_NAME ? `mod-${index + 1}` : `file-${index + 1}`);
+  const suffix = downloadId ? `-${downloadId}` : '';
+  const extension = fallbackDirectory === RESOURCEPACKS_DIR_NAME ? '.zip' : fallbackDirectory === MODS_DIR_NAME ? '.jar' : '';
+
+  return `${baseName}${suffix}${extension}`;
+}
+
 function normalizeDownloadItem(item, index, fallbackDirectory) {
   if (typeof item === 'string') {
     const url = normalizeString(item);
+    const id = `item-${index + 1}`;
     return {
-      id: `item-${index + 1}`,
+      id,
       url,
-      fileName: fileNameFromUrl(url, `${fallbackDirectory}-${index + 1}.jar`),
+      fileName: fileNameFromUrl(url, fallbackFileName(id, url, index, fallbackDirectory)),
       sha256: null,
       directory: fallbackDirectory
     };
@@ -129,11 +155,13 @@ function normalizeDownloadItem(item, index, fallbackDirectory) {
     return null;
   }
 
-  const name = normalizeString(item.fileName || item.filename || item.name);
-  const fallbackName = fallbackDirectory === MODS_DIR_NAME ? `mod-${index + 1}.jar` : `${fallbackDirectory}-${index + 1}`;
+  const rawName = normalizeString(item.fileName || item.filename || item.name);
+  const name = /^\d+$/.test(rawName) ? '' : rawName;
+  const id = normalizeString(item.id || item.slug || name) || `item-${index + 1}`;
+  const fallbackName = fallbackFileName(id, url, index, fallbackDirectory);
 
   return {
-    id: normalizeString(item.id || item.slug || name) || `item-${index + 1}`,
+    id,
     url,
     fileName: name || fileNameFromUrl(url, fallbackName),
     sha256: normalizeString(item.sha256 || item.hash) || null,
@@ -380,6 +408,12 @@ async function downloadFile(item, destinationPath, progressCallback, abortSignal
 
   if (!response.ok) {
     throw new Error(`Failed to download ${item.fileName} (${response.status})`);
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+  const expectedArchive = ['.jar', '.zip'].includes(path.extname(destinationPath).toLowerCase());
+  if (expectedArchive && contentType.toLowerCase().includes('text/html')) {
+    throw new Error(`Download URL for ${item.fileName} returned HTML instead of a mod file.`);
   }
 
   await fs.promises.mkdir(path.dirname(destinationPath), { recursive: true });
